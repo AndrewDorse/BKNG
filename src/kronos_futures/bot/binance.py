@@ -160,23 +160,18 @@ class BinanceGateway:
         ]
 
     async def symbol_is_isolated(self, symbol: str) -> bool:
-        account = await self._request("GET", "/fapi/v3/account", signed=True)
-        account_positions = account.get("positions", [])
-        account_match = next(
-            (item for item in account_positions if item.get("symbol") == symbol),
-            None,
-        )
-        if account_match is not None:
-            return account_match.get("marginType") == "isolated"
-
-        payload = await self._request(
-            "GET", "/fapi/v3/positionRisk", {"symbol": symbol}, signed=True
-        )
-        if not payload:
-            raise RuntimeError(
-                f"Binance returned no account or position-risk record for {symbol}"
+        try:
+            await self._request(
+                "POST",
+                "/fapi/v1/marginType",
+                {"symbol": symbol, "marginType": "ISOLATED"},
+                signed=True,
             )
-        return all(item["marginType"] == "isolated" for item in payload)
+        except BinanceError as exc:
+            # Binance returns -4046 when the requested margin type is already active.
+            if exc.code != -4046:
+                raise
+        return True
 
     @staticmethod
     def _order_result(payload: dict[str, Any]) -> OrderResult:
