@@ -21,7 +21,7 @@ RUN pip install --upgrade pip \
     && pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
     && pip install -r /app/requirements.txt
 
-COPY pyproject.toml README.md /app/
+COPY pyproject.toml /app/
 COPY src /app/src
 RUN pip install --no-deps /app
 
