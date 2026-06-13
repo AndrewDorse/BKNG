@@ -160,11 +160,22 @@ class BinanceGateway:
         ]
 
     async def symbol_is_isolated(self, symbol: str) -> bool:
+        account = await self._request("GET", "/fapi/v3/account", signed=True)
+        account_positions = account.get("positions", [])
+        account_match = next(
+            (item for item in account_positions if item.get("symbol") == symbol),
+            None,
+        )
+        if account_match is not None:
+            return account_match.get("marginType") == "isolated"
+
         payload = await self._request(
             "GET", "/fapi/v3/positionRisk", {"symbol": symbol}, signed=True
         )
         if not payload:
-            raise RuntimeError(f"No position-risk record returned for {symbol}")
+            raise RuntimeError(
+                f"Binance returned no account or position-risk record for {symbol}"
+            )
         return all(item["marginType"] == "isolated" for item in payload)
 
     @staticmethod
