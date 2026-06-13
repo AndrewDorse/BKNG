@@ -61,4 +61,4 @@ EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=10 \
     CMD curl -fsS http://localhost:8081/health/live || exit 1
 
-CMD ["uvicorn", "kronos_futures.bot.inference:app", "--host", "0.0.0.0", "--port", "8081"]
+CMD ["uvicorn", "kronos_futures.bot.inference:app", "--host", "0.0.0.0", "--port", "8081", "--no-access-log"]

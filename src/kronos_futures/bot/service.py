@@ -30,7 +30,15 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("symbol", "outcome"):
+        for key in (
+            "symbol",
+            "mode",
+            "bindings",
+            "side",
+            "quantity",
+            "price",
+            "reason",
+        ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         if record.exc_info:
@@ -42,6 +50,9 @@ def configure_logging() -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), handlers=[handler], force=True)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 class BotService:
@@ -65,6 +76,13 @@ class BotService:
         self.live = True
 
     async def start(self) -> None:
+        logging.getLogger(__name__).info(
+            "trader_start",
+            extra={
+                "mode": self.settings.mode.value,
+                "bindings": sum(binding.enabled for binding in self.settings.bindings),
+            },
+        )
         for binding in self.settings.bindings:
             if not binding.enabled:
                 continue
@@ -81,6 +99,7 @@ class BotService:
         await asyncio.gather(*(engine.run() for engine in self.engines))
 
     async def stop(self) -> None:
+        logging.getLogger(__name__).info("trader_stop")
         self.live = False
         for engine in self.engines:
             engine.running = False

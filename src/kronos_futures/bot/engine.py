@@ -49,6 +49,7 @@ class TradingEngine:
         self.halted_reason: str | None = None
         self.last_analyzed_candle: datetime | None = None
         self.peak_equity = None
+        self.last_position: PositionContext | None = None
 
     async def preflight(self) -> None:
         attempts = 0
@@ -82,6 +83,13 @@ class TradingEngine:
         await self.reconcile()
         self.ready = True
         READY.labels(self.binding.name).set(1)
+        LOG.info(
+            "binding_ready",
+            extra={
+                "symbol": self.binding.symbol,
+                "mode": self.exchange.mode.value,
+            },
+        )
 
     async def run(self) -> None:
         try:
@@ -135,10 +143,6 @@ class TradingEngine:
             intent, market, forecast, account, self.rules
         )
         SIGNALS.labels(self.binding.name, "approved" if approved else reason).inc()
-        LOG.info(
-            "signal_evaluated",
-            extra={"symbol": self.binding.symbol, "outcome": reason},
-        )
         if approved:
             await self.enter(intent, market, account)
 
@@ -149,6 +153,18 @@ class TradingEngine:
         ]
         orders = await self.exchange.open_orders(self.binding.symbol)
         if not positions:
+            if self.last_position and self.last_position.is_open:
+                LOG.info(
+                    "deal_closed",
+                    extra={
+                        "symbol": self.last_position.symbol,
+                        "side": self.last_position.side.value,
+                        "quantity": str(self.last_position.quantity),
+                        "price": str(self.last_position.entry_price),
+                        "reason": "exchange_position_closed",
+                    },
+                )
+            self.last_position = None
             bot_orders = [
                 order for order in orders if order.client_order_id.startswith("kr_")
             ]
@@ -186,7 +202,9 @@ class TradingEngine:
                 await self.flatten(position, "protection_failed")
                 self.halted_reason = "protection_failed"
                 raise
-        return replace(position, protected=True)
+        protected_position = replace(position, protected=True)
+        self.last_position = protected_position
+        return protected_position
 
     async def enter(self, intent, market, account) -> None:
         assert intent.side and self.rules
@@ -216,6 +234,16 @@ class TradingEngine:
             await self.flatten(position, "protection_failed")
             self.halted_reason = "protection_failed"
             raise
+        self.last_position = replace(position, protected=True)
+        LOG.info(
+            "deal_opened",
+            extra={
+                "symbol": position.symbol,
+                "side": position.side.value,
+                "quantity": str(position.quantity),
+                "price": str(position.entry_price),
+            },
+        )
 
     async def place_protection(
         self, position: PositionContext, reference_time: datetime
@@ -255,7 +283,6 @@ class TradingEngine:
             raise RuntimeError(f"Target rejected with status {target_result.status}")
 
     async def flatten(self, position: PositionContext, reason: str) -> None:
-        del reason
         if not position.is_open or not position.side:
             return
         await self.exchange.cancel_all_orders(position.symbol)
@@ -271,3 +298,15 @@ class TradingEngine:
         )
         result = await self.exchange.submit_order(request)
         ORDERS.labels(self.binding.name, "exit", result.status).inc()
+        if result.status in {"FILLED", "PARTIALLY_FILLED"}:
+            LOG.info(
+                "deal_closed",
+                extra={
+                    "symbol": position.symbol,
+                    "side": position.side.value,
+                    "quantity": str(result.executed_quantity),
+                    "price": str(result.average_price),
+                    "reason": reason,
+                },
+            )
+            self.last_position = None

@@ -152,7 +152,7 @@ class BinanceGateway:
                 symbol=item["symbol"],
                 quantity=Decimal(item["positionAmt"]),
                 entry_price=Decimal(item["entryPrice"]),
-                isolated=item["marginType"] == "isolated",
+                isolated=item.get("marginType", "isolated").lower() == "isolated",
                 leverage=int(item["leverage"]),
             )
             for item in payload

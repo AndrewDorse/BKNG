@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 
 from kronos_futures.bot.binance import BinanceGateway
 
@@ -35,3 +36,25 @@ def test_symbol_is_isolated_accepts_no_change_needed():
     gateway._request = request
 
     assert asyncio.run(gateway.symbol_is_isolated("BTCUSDT")) is True
+
+
+def test_positions_accepts_v3_payload_without_margin_type():
+    gateway = object.__new__(BinanceGateway)
+
+    async def request(method, path, params=None, *, signed=False, retries=3):
+        return [
+            {
+                "symbol": "BTCUSDT",
+                "positionAmt": "0.001",
+                "entryPrice": "60000",
+                "leverage": "50",
+            }
+        ]
+
+    gateway._request = request
+
+    positions = asyncio.run(gateway.positions())
+
+    assert len(positions) == 1
+    assert positions[0].quantity == Decimal("0.001")
+    assert positions[0].isolated is True
