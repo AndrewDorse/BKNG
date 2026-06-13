@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import signal
+from decimal import Decimal
 from pathlib import Path
 
 import uvicorn
@@ -55,7 +56,10 @@ class BotService:
             self.settings.mode,
         )
         self.exchange = (
-            PaperGateway(self.market)
+            PaperGateway(
+                self.market,
+                Decimal(os.getenv("PAPER_STARTING_EQUITY", "20")),
+            )
             if self.settings.mode is TradingMode.PAPER
             else self.market
         )
@@ -64,11 +68,13 @@ class BotService:
         self.live = True
 
     async def start(self) -> None:
+        logging.getLogger(__name__).info("connecting_postgres")
         await self.store.connect()
         migrations = Path(os.getenv("MIGRATIONS_DIR", "/app/migrations"))
         if not migrations.exists():
             migrations = Path(__file__).resolve().parents[3] / "migrations"
         await self.store.migrate(migrations)
+        logging.getLogger(__name__).info("database_migrations_complete")
         for binding in self.settings.bindings:
             if not binding.enabled:
                 continue
@@ -84,7 +90,13 @@ class BotService:
                 )
             )
         for engine in self.engines:
+            logging.getLogger(__name__).info(
+                "running_preflight", extra={"symbol": engine.binding.symbol}
+            )
             await engine.preflight()
+            logging.getLogger(__name__).info(
+                "preflight_complete", extra={"symbol": engine.binding.symbol}
+            )
         self.ready = True
         tasks = []
         for engine in self.engines:

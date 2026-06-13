@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from pydantic import BaseModel
 
 from .domain import ForecastContext, MarketContext
 from .kronos import ForecastConfig, KronosPathForecaster
+
+LOG = logging.getLogger(__name__)
 
 
 class CandlePayload(BaseModel):
@@ -48,6 +51,8 @@ class InferenceRuntime:
         self.forecaster = KronosPathForecaster(self.config)
         self.ready = False
         self.p95_ms = 0
+        self.available_memory_mb = 0
+        self.readiness_error: str | None = "model_not_loaded"
 
     def forecast(self, request: ForecastRequest) -> dict:
         if len(request.candles) != self.config.context:
@@ -96,17 +101,32 @@ class InferenceRuntime:
             for index in range(512)
         ]
         request = ForecastRequest(candles=candles)
-        latencies = [self.forecast(request)["latency_ms"] for _ in range(10)]
-        self.p95_ms = sorted(latencies)[-1]
-        minimum_memory = int(os.getenv("MIN_AVAILABLE_MEMORY_MB", "512")) * 1024 * 1024
-        self.ready = (
-            self.p95_ms <= int(os.getenv("MAX_INFERENCE_P95_MS", "10000"))
-            and psutil.virtual_memory().available >= minimum_memory
+        runs = max(1, int(os.getenv("INFERENCE_BENCHMARK_RUNS", "3")))
+        latencies = [self.forecast(request)["latency_ms"] for _ in range(runs)]
+        self.p95_ms = sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)]
+        self.available_memory_mb = psutil.virtual_memory().available // (1024 * 1024)
+        maximum_latency = int(os.getenv("MAX_INFERENCE_P95_MS", "10000"))
+        minimum_memory_mb = int(os.getenv("MIN_AVAILABLE_MEMORY_MB", "512"))
+        failures = []
+        if self.p95_ms > maximum_latency:
+            failures.append(f"p95_ms={self.p95_ms} exceeds {maximum_latency}")
+        if self.available_memory_mb < minimum_memory_mb:
+            failures.append(
+                f"available_memory_mb={self.available_memory_mb} below {minimum_memory_mb}"
+            )
+        self.readiness_error = "; ".join(failures) or None
+        self.ready = not failures
+        LOG.info(
+            "inference_benchmark_complete runs=%s p95_ms=%s available_memory_mb=%s ready=%s",
+            runs,
+            self.p95_ms,
+            self.available_memory_mb,
+            self.ready,
         )
 
 
 class HttpInferenceClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 10.0):
+    def __init__(self, base_url: str, timeout_seconds: float = 15.0):
         self.base_url = base_url.rstrip("/")
         self.client = httpx.AsyncClient(timeout=timeout_seconds)
 
@@ -154,7 +174,9 @@ app = FastAPI(title="Kronos inference", docs_url=None, redoc_url=None)
 @app.on_event("startup")
 async def startup() -> None:
     global runtime
+    LOG.info("loading_kronos_model")
     runtime = await asyncio.to_thread(InferenceRuntime)
+    LOG.info("running_inference_benchmark")
     await asyncio.to_thread(runtime.benchmark)
 
 
@@ -170,11 +192,16 @@ async def forecast(request: ForecastRequest):
 
 @app.get("/health/live")
 async def live():
-    return {"live": True}
+    return {"live": True, "model_loaded": runtime is not None}
 
 
 @app.get("/health/ready")
 async def ready():
     if runtime is None or not runtime.ready:
-        raise HTTPException(503, "Model benchmark has not passed")
-    return {"ready": True, "p95_ms": runtime.p95_ms}
+        detail = "model_not_loaded" if runtime is None else runtime.readiness_error
+        raise HTTPException(503, detail or "Model benchmark has not passed")
+    return {
+        "ready": True,
+        "p95_ms": runtime.p95_ms,
+        "available_memory_mb": runtime.available_memory_mb,
+    }

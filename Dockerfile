@@ -59,7 +59,7 @@ ENV HF_HOME=/models/huggingface \
 
 VOLUME ["/models"]
 EXPOSE 8081
-HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=5 \
-    CMD curl -fsS http://localhost:8081/health/live || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=900s --retries=5 \
+    CMD curl -fsS http://localhost:8081/health/ready || exit 1
 
 CMD ["uvicorn", "kronos_futures.bot.inference:app", "--host", "0.0.0.0", "--port", "8081"]

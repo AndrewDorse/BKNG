@@ -36,6 +36,42 @@ startup. Its readiness check runs ten forecasts and rejects trading when the
 worst observed latency exceeds 10 seconds or less than 512 MB is available.
 The initial model download and benchmark can take several minutes on one CPU.
 
+## Deployment Diagnostics
+
+Use these commands before changing configuration:
+
+```bash
+docker compose ps -a
+docker compose logs --tail=300 postgres
+docker compose logs --tail=300 inference
+docker compose logs --tail=300 trader
+docker compose run --rm trader kronos-bot --help
+docker compose exec inference curl -i http://localhost:8081/health/ready
+```
+
+Common failures:
+
+- `ModuleNotFoundError: tqdm`: stale image; rebuild with `--no-cache`.
+- Missing `.env`: no longer fatal; Compose defaults to paper mode.
+- Inference `503`: response text identifies latency or available-memory failure.
+- Trader repeatedly restarts: inspect the named preflight gate in trader logs.
+- Binance HTTP `451`/`403`: the VPS network location cannot access Binance
+  Futures; deployment must use a permitted region and IP.
+- PostgreSQL authentication failure: remove an old test volume or use the
+  password that originally initialized it. Changing `POSTGRES_PASSWORD` does
+  not change the password inside an existing database volume.
+
+For a new paper deployment with disposable database state:
+
+```bash
+docker compose down
+docker volume rm bkng_postgres_data 2>/dev/null || true
+docker compose build --no-cache
+docker compose up -d --force-recreate
+```
+
+Do not remove the database volume on a live deployment without a backup.
+
 ## Credentials
 
 Create a Binance API key with USD-M Futures trading permission only:
