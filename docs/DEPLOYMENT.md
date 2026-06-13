@@ -23,15 +23,18 @@ git clone <your-repository> /opt/kronos-bot
 cd /opt/kronos-bot
 cp .env.example .env
 chmod 600 .env
-docker compose build
-docker compose up -d
+# Set POSTGRES_PASSWORD and choose paper/testnet/live first.
+docker compose build --no-cache
+docker compose up -d --force-recreate
 docker compose ps
+docker compose logs -f inference trader
 curl http://127.0.0.1:8080/health/ready
 ```
 
 The inference container downloads the pinned model and tokenizer on first
 startup. Its readiness check runs ten forecasts and rejects trading when the
 worst observed latency exceeds 10 seconds or less than 512 MB is available.
+The initial model download and benchmark can take several minutes on one CPU.
 
 ## Credentials
 

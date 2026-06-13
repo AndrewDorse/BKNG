@@ -9,3 +9,4 @@ __pycache__
 .ruff_cache
 *.egg-info
 vendor
+docker
