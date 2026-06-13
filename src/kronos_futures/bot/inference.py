@@ -105,7 +105,7 @@ class InferenceRuntime:
         latencies = [self.forecast(request)["latency_ms"] for _ in range(runs)]
         self.p95_ms = sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)]
         self.available_memory_mb = psutil.virtual_memory().available // (1024 * 1024)
-        maximum_latency = int(os.getenv("MAX_INFERENCE_P95_MS", "10000"))
+        maximum_latency = int(os.getenv("MAX_INFERENCE_P95_MS", "20000"))
         minimum_memory_mb = int(os.getenv("MIN_AVAILABLE_MEMORY_MB", "512"))
         failures = []
         if self.p95_ms > maximum_latency:
@@ -168,16 +168,28 @@ class HttpInferenceClient:
 
 
 runtime: InferenceRuntime | None = None
+initialization_error: str | None = None
+initialization_task: asyncio.Task | None = None
 app = FastAPI(title="Kronos inference", docs_url=None, redoc_url=None)
+
+
+async def initialize_runtime() -> None:
+    global runtime, initialization_error
+    try:
+        LOG.info("loading_kronos_model")
+        loaded = await asyncio.to_thread(InferenceRuntime)
+        LOG.info("running_inference_benchmark")
+        await asyncio.to_thread(loaded.benchmark)
+        runtime = loaded
+    except Exception as exc:
+        initialization_error = f"{type(exc).__name__}: {exc}"
+        LOG.exception("inference_initialization_failed")
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    global runtime
-    LOG.info("loading_kronos_model")
-    runtime = await asyncio.to_thread(InferenceRuntime)
-    LOG.info("running_inference_benchmark")
-    await asyncio.to_thread(runtime.benchmark)
+    global initialization_task
+    initialization_task = asyncio.create_task(initialize_runtime())
 
 
 @app.post("/forecast")
@@ -192,13 +204,20 @@ async def forecast(request: ForecastRequest):
 
 @app.get("/health/live")
 async def live():
-    return {"live": True, "model_loaded": runtime is not None}
+    return {
+        "live": True,
+        "model_loaded": runtime is not None,
+        "initialization_error": initialization_error,
+    }
 
 
 @app.get("/health/ready")
 async def ready():
     if runtime is None or not runtime.ready:
-        detail = "model_not_loaded" if runtime is None else runtime.readiness_error
+        detail = (
+            initialization_error
+            or ("model_loading" if runtime is None else runtime.readiness_error)
+        )
         raise HTTPException(503, detail or "Model benchmark has not passed")
     return {
         "ready": True,

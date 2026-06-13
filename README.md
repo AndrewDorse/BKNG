@@ -40,9 +40,9 @@ docker compose logs -f inference trader
 curl http://127.0.0.1:8080/health/ready
 ```
 
-The first inference startup downloads the pinned model and runs ten CPU
-forecasts. On a one-vCPU VPS this can take several minutes. The health check
-allows ten minutes for initialization.
+The first inference startup downloads the pinned model and runs CPU forecasts.
+On a one-vCPU VPS this can take several minutes. The trader starts independently
+and waits until inference reports ready.
 
 If startup fails, run:
 

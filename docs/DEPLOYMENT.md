@@ -32,8 +32,9 @@ curl http://127.0.0.1:8080/health/ready
 ```
 
 The inference container downloads the pinned model and tokenizer on first
-startup. Its readiness check runs ten forecasts and rejects trading when the
-worst observed latency exceeds 10 seconds or less than 512 MB is available.
+startup. Its readiness check runs configured warm-up forecasts and rejects
+trading when latency exceeds 20 seconds or less than 512 MB is available.
+The inference API becomes healthy immediately; trader waits for model readiness.
 The initial model download and benchmark can take several minutes on one CPU.
 
 ## Deployment Diagnostics

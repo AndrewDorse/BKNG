@@ -51,9 +51,18 @@ class TradingEngine:
         self.peak_equity = None
 
     async def preflight(self) -> None:
+        attempts = 0
+        while self.running and not await self.inference.ready():
+            attempts += 1
+            if attempts == 1 or attempts % 6 == 0:
+                LOG.info(
+                    "waiting_for_inference",
+                    extra={"symbol": self.binding.symbol, "attempt": attempts},
+                )
+            await asyncio.sleep(10)
+        if not self.running:
+            raise RuntimeError("Trader stopped while waiting for inference")
         await self.exchange.synchronize_time()
-        if not await self.inference.ready():
-            raise RuntimeError("Inference readiness benchmark failed")
         if not await self.exchange.position_mode_is_one_way():
             raise RuntimeError("Binance account must use one-way position mode")
         if not await self.exchange.account_is_single_asset():

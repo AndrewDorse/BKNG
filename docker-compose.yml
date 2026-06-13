@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-1}
-      MAX_INFERENCE_P95_MS: ${MAX_INFERENCE_P95_MS:-10000}
+      MAX_INFERENCE_P95_MS: ${MAX_INFERENCE_P95_MS:-20000}
       MIN_AVAILABLE_MEMORY_MB: ${MIN_AVAILABLE_MEMORY_MB:-512}
       INFERENCE_BENCHMARK_RUNS: ${INFERENCE_BENCHMARK_RUNS:-3}
       HF_HOME: /models/huggingface
@@ -32,7 +32,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       inference:
-        condition: service_healthy
+        condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
     stop_grace_period: 30s
