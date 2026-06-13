@@ -1,0 +1,33 @@
+mode: paper
+database_url: postgresql://kronos:kronos@postgres:5432/kronos
+inference_url: http://inference:8081
+
+health:
+  host: 0.0.0.0
+  port: 8080
+
+bindings:
+  - name: btc_kronos_1m
+    strategy: kronos_futures.bot.strategies:KronosMeanReversionStrategy
+    symbol: BTCUSDT
+    interval: 1m
+    enabled: true
+    validated: true
+    parameters:
+      zscore_lookback: 30
+      zscore_threshold: 1.0
+      confidence_cutoff: 0.0004220834304313748
+      minimum_agreement: 0.8125
+      maximum_hold_minutes: 60
+    risk:
+      profile: optimized_guarded
+      leverage: 50
+      margin_fraction: 0.32
+      stop_pct: 0.007
+      max_daily_loss_pct: 0.15
+      max_drawdown_pct: 0.25
+      consecutive_loss_limit: 3
+      loss_pause_hours: 6
+      maximum_signal_age_seconds: 10
+      maximum_price_drift_pct: 0.001
+      maximum_spread_pct: 0.0002

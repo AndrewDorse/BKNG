@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+/research/
+/artifacts/
+/outputs/
+vendor/Kronos/
+*.egg-info/
+.env
+*.pem
+secrets/

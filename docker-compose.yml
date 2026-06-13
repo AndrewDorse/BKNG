@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16.6-bookworm
+    environment:
+      POSTGRES_DB: kronos
+      POSTGRES_USER: kronos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kronos}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kronos -d kronos"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  inference:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: inference
+    environment:
+      TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-1}
+      MAX_INFERENCE_P95_MS: ${MAX_INFERENCE_P95_MS:-10000}
+      MIN_AVAILABLE_MEMORY_MB: ${MIN_AVAILABLE_MEMORY_MB:-512}
+    volumes:
+      - model-cache:/models
+    mem_limit: 2500m
+    cpus: 1.0
+    restart: unless-stopped
+
+  trader:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: trader
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://kronos:${POSTGRES_PASSWORD:-kronos}@postgres:5432/kronos
+      INFERENCE_URL: http://inference:8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+      inference:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  model-cache:
