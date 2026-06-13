@@ -31,7 +31,7 @@ def contiguous(candles, interval_seconds: int, required: int = 512) -> bool:
     selected = candles[-required:]
     return all(
         int((right.open_time - left.open_time).total_seconds()) == interval_seconds
-        for left, right in zip(selected, selected[1:], strict=True)
+        for left, right in zip(selected, selected[1:])
     )
 
 
