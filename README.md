@@ -7,9 +7,13 @@ candles only.
 ## Services
 
 - `trader`: market streams, strategy/risk engine, Binance execution,
-  PostgreSQL recovery, reconciliation, health, and Prometheus metrics.
+  Binance position/order reconciliation, health, and Prometheus metrics.
 - `inference`: persistent CPU-only Kronos-small inference process.
-- `postgres`: signals, order intents, fills, account events, and risk state.
+
+The trader checks Binance every 30 seconds. For each newly completed BTC
+one-minute candle it runs Kronos once, opens at most one position, and places
+exchange-native mark-price stop-loss and take-profit orders. Binance is the
+source of truth after restarts; no database is required.
 
 ## BTC Profile
 
@@ -21,15 +25,14 @@ candles only.
 - 50x isolated exchange leverage using 32% of available equity as margin.
 - Maximum account notional: 16x equity.
 - 0.7% mark-price stop and 60-minute maximum hold.
-- 15% daily loss halt, 25% account drawdown halt, and six-hour pause after
-  three consecutive losses.
+- 25% account drawdown halt while the trader process is running.
 
 ## Deploy
 
 ```bash
 cp .env.example .env
 chmod 600 .env
-# Edit POSTGRES_PASSWORD and trading mode before startup.
+# Edit trading mode and Binance credentials before startup.
 docker compose build --no-cache
 docker compose up -d --force-recreate
 docker compose ps
@@ -45,7 +48,7 @@ If startup fails, run:
 
 ```bash
 docker compose ps -a
-docker compose logs --tail=300 postgres inference trader
+docker compose logs --tail=300 inference trader
 docker compose run --rm trader kronos-bot --help
 docker compose exec inference curl -fsS http://localhost:8081/health/ready
 ```

@@ -176,6 +176,7 @@ class BinanceGateway:
             status=payload["status"],
             executed_quantity=Decimal(payload.get("executedQty", "0")),
             average_price=Decimal(payload.get("avgPrice", "0")),
+            order_type=payload.get("type", ""),
         )
 
     async def open_orders(self, symbol: str | None = None) -> list[OrderResult]:

@@ -3,18 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections import deque
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+
 from prometheus_client import Counter, Gauge, Histogram
 
-from .domain import (
-    AccountContext,
-    MarketContext,
-    OrderRequest,
-    PositionContext,
-    Side,
-)
+from .domain import MarketContext, OrderRequest, PositionContext, Side
 from .risk import GuardedRiskEngine
 from .settings import BindingSettings
 
@@ -42,18 +36,19 @@ def contiguous(candles, interval_seconds: int, required: int = 512) -> bool:
 
 
 class TradingEngine:
-    def __init__(self, binding, strategy, risk, exchange, inference, store):
+    def __init__(self, binding, strategy, risk, exchange, inference, poll_seconds: int = 30):
         self.binding: BindingSettings = binding
         self.strategy = strategy
         self.risk: GuardedRiskEngine = risk
         self.exchange = exchange
         self.inference = inference
-        self.store = store
-        self.candles = deque(maxlen=600)
+        self.poll_seconds = poll_seconds
         self.rules = None
-        self.position = PositionContext(binding.symbol)
         self.running = True
+        self.ready = False
         self.halted_reason: str | None = None
+        self.last_analyzed_candle: datetime | None = None
+        self.peak_equity = None
 
     async def preflight(self) -> None:
         await self.exchange.synchronize_time()
@@ -68,84 +63,55 @@ class TradingEngine:
         self.rules = await self.exchange.symbol_rules(self.binding.symbol)
         if self.binding.risk.leverage > self.rules.maximum_leverage:
             raise RuntimeError("Configured leverage exceeds symbol limit")
-        positions = [p for p in await self.exchange.positions() if p.symbol == self.binding.symbol]
-        orders = await self.exchange.open_orders(self.binding.symbol)
-        if positions:
-            owned = await self.store.owns_symbol(self.binding.symbol)
-            if not owned:
-                raise RuntimeError(f"Unknown position exists for {self.binding.symbol}")
-            position = positions[0]
-            if not position.isolated:
-                raise RuntimeError("Owned position is not isolated")
-            stops = [order for order in orders if order.client_order_id.startswith("kr_stop_")]
-            if not stops:
-                await self._flatten_and_halt("owned_position_missing_stop")
-                raise RuntimeError("Owned position had no protective stop")
-            self.position = PositionContext(
-                symbol=position.symbol,
-                side=Side.LONG if position.quantity > 0 else Side.SHORT,
-                quantity=abs(position.quantity),
-                entry_price=position.entry_price,
-                protected=True,
-            )
-        elif orders:
-            unknown = [
-                order for order in orders if not order.client_order_id.startswith("kr_")
-            ]
-            if unknown:
-                raise RuntimeError(f"Unknown open orders exist for {self.binding.symbol}")
         await self.exchange.set_leverage(self.binding.symbol, self.binding.risk.leverage)
-        initial = await self.exchange.klines(
+        candles = await self.exchange.klines(
             self.binding.symbol, self.binding.interval, limit=513
         )
-        self.candles.extend(initial[-512:])
-        if not contiguous(tuple(self.candles), 60):
+        candles = candles[-512:]
+        if not contiguous(candles, 60):
             raise RuntimeError("Initial candle history is not contiguous")
+        await self.reconcile()
+        self.ready = True
         READY.labels(self.binding.name).set(1)
 
     async def run(self) -> None:
-        await self.preflight()
-        await self.run_after_preflight()
-
-    async def run_after_preflight(self) -> None:
-        reconcile_task = asyncio.create_task(self._reconcile_loop())
         try:
-            async for candle in self.exchange.closed_kline_stream(
-                self.binding.symbol, self.binding.interval
-            ):
-                if not self.running:
-                    break
-                await self.on_candle(candle)
+            await self.preflight()
+            while self.running:
+                started = asyncio.get_running_loop().time()
+                try:
+                    await self.cycle()
+                except Exception:
+                    LOG.exception("analysis_cycle_failed", extra={"symbol": self.binding.symbol})
+                elapsed = asyncio.get_running_loop().time() - started
+                await asyncio.sleep(max(1, self.poll_seconds - elapsed))
         finally:
-            reconcile_task.cancel()
+            self.ready = False
             READY.labels(self.binding.name).set(0)
 
-    async def on_candle(self, candle) -> None:
-        if self.candles and candle.open_time <= self.candles[-1].open_time:
+    async def cycle(self) -> None:
+        position = await self.reconcile()
+        candles = await self.exchange.klines(
+            self.binding.symbol, self.binding.interval, limit=513
+        )
+        candles = candles[-512:]
+        if not contiguous(candles, 60):
+            raise RuntimeError("Binance returned non-contiguous candle history")
+        latest = candles[-1]
+        if self.last_analyzed_candle == latest.open_time:
             return
-        self.candles.append(candle)
-        if not contiguous(tuple(self.candles), 60):
-            READY.labels(self.binding.name).set(0)
-            backfill = await self.exchange.klines(
-                self.binding.symbol, self.binding.interval, limit=513
-            )
-            self.candles.clear()
-            self.candles.extend(backfill[-512:])
-            if not contiguous(tuple(self.candles), 60):
-                LOG.error("candle_gap_unresolved", extra={"symbol": self.binding.symbol})
-                return
-            READY.labels(self.binding.name).set(1)
-        if await self._exit_if_expired(candle.close_time):
+        self.last_analyzed_candle = latest.open_time
+        if position.is_open or self.halted_reason:
             return
-        state = await self.store.runtime_state("control")
-        if state and state.get("paused"):
-            return
+
         bid, ask = await self.exchange.book_ticker(self.binding.symbol)
-        account = await self.store.risk_adjusted_account(await self.exchange.account())
+        account = await self.exchange.account()
+        self.peak_equity = max(self.peak_equity or account.equity, account.equity)
+        account = replace(account, peak_equity=self.peak_equity)
         market = MarketContext(
             self.binding.symbol,
             self.binding.interval,
-            tuple(self.candles)[-512:],
+            candles,
             bid,
             ask,
             datetime.now(timezone.utc),
@@ -155,159 +121,144 @@ class TradingEngine:
         INFERENCE.labels(self.binding.name).observe(
             asyncio.get_running_loop().time() - started
         )
-        intent = self.strategy.evaluate(market, forecast, self.position, account)
-        inserted = await self.store.record_signal(self.binding.name, intent)
-        if not inserted:
-            SIGNALS.labels(self.binding.name, "duplicate").inc()
-            return
+        intent = self.strategy.evaluate(market, forecast, position, account)
         approved, reason = self.risk.approve_entry(
             intent, market, forecast, account, self.rules
         )
         SIGNALS.labels(self.binding.name, "approved" if approved else reason).inc()
+        LOG.info(
+            "signal_evaluated",
+            extra={"symbol": self.binding.symbol, "outcome": reason},
+        )
         if approved:
-            await self._enter(intent, market, account)
+            await self.enter(intent, market, account)
 
-    async def _enter(self, intent, market, account: AccountContext) -> None:
+    async def reconcile(self) -> PositionContext:
+        positions = [
+            item for item in await self.exchange.positions()
+            if item.symbol == self.binding.symbol
+        ]
+        orders = await self.exchange.open_orders(self.binding.symbol)
+        if not positions:
+            bot_orders = [
+                order for order in orders if order.client_order_id.startswith("kr_")
+            ]
+            if bot_orders:
+                await self.exchange.cancel_all_orders(self.binding.symbol)
+            return PositionContext(self.binding.symbol)
+
+        snapshot = positions[0]
+        side = Side.LONG if snapshot.quantity > 0 else Side.SHORT
+        position = PositionContext(
+            symbol=snapshot.symbol,
+            side=side,
+            quantity=abs(snapshot.quantity),
+            entry_price=snapshot.entry_price,
+            protected=False,
+        )
+        stop_exists = any(
+            order.client_order_id.startswith("kr_stop_")
+            or order.order_type == "STOP_MARKET"
+            for order in orders
+        )
+        target_exists = any(
+            order.client_order_id.startswith("kr_take_")
+            or order.order_type == "TAKE_PROFIT_MARKET"
+            for order in orders
+        )
+        if not stop_exists or not target_exists:
+            await self.exchange.cancel_all_orders(self.binding.symbol)
+            try:
+                await self.place_protection(position, datetime.now(timezone.utc))
+            except Exception:
+                LOG.exception(
+                    "position_protection_failed", extra={"symbol": self.binding.symbol}
+                )
+                await self.flatten(position, "protection_failed")
+                self.halted_reason = "protection_failed"
+                raise
+        return replace(position, protected=True)
+
+    async def enter(self, intent, market, account) -> None:
         assert intent.side and self.rules
         quantity = self.risk.entry_quantity(account, market, self.rules)
-        entry_id = client_order_id(
-            self.binding.name, intent.candle_close_time, "entry"
-        )
         request = OrderRequest(
             symbol=self.binding.symbol,
             side=intent.side.entry_order_side,
             order_type="MARKET",
             quantity=quantity,
-            client_order_id=entry_id,
+            client_order_id=client_order_id(
+                self.binding.name, intent.candle_close_time, "entry"
+            ),
         )
-        await self.store.persist_order_intent(self.binding.name, request, "entry")
         result = await self.exchange.submit_order(request)
-        await self.store.record_order(result)
         ORDERS.labels(self.binding.name, "entry", result.status).inc()
-        if result.status not in {"FILLED", "PARTIALLY_FILLED"} or result.executed_quantity <= 0:
+        if result.status not in {"FILLED", "PARTIALLY_FILLED"}:
             return
-        entry_price = result.average_price
-        self.position = PositionContext(
+        position = PositionContext(
             self.binding.symbol,
             intent.side,
             result.executed_quantity,
-            entry_price,
-            datetime.now(timezone.utc),
-            False,
+            result.average_price,
         )
         try:
-            await self._place_stop(intent.candle_close_time)
+            await self.place_protection(position, intent.candle_close_time)
         except Exception:
-            LOG.exception("protective_stop_failed", extra={"symbol": self.binding.symbol})
-            await self._flatten_and_halt("protective_stop_failed")
+            await self.flatten(position, "protection_failed")
+            self.halted_reason = "protection_failed"
+            raise
 
-    async def _place_stop(self, candle_close_time: datetime) -> None:
-        assert self.position.side and self.rules
-        stop_price = self.risk.stop_price(
-            self.position.entry_price, self.position.side.sign, self.rules.price_tick
-        )
-        request = OrderRequest(
-            symbol=self.binding.symbol,
-            side=self.position.side.exit_order_side,
+    async def place_protection(
+        self, position: PositionContext, reference_time: datetime
+    ) -> None:
+        assert position.side and self.rules
+        stop = OrderRequest(
+            symbol=position.symbol,
+            side=position.side.exit_order_side,
             order_type="STOP_MARKET",
-            quantity=self.position.quantity,
-            client_order_id=client_order_id(self.binding.name, candle_close_time, "stop"),
-            stop_price=stop_price,
+            quantity=position.quantity,
+            client_order_id=client_order_id(self.binding.name, reference_time, "stop"),
+            stop_price=self.risk.stop_price(
+                position.entry_price, position.side.sign, self.rules.price_tick
+            ),
             working_type="MARK_PRICE",
             close_position=True,
         )
-        await self.store.persist_order_intent(self.binding.name, request, "stop")
-        result = await self.exchange.submit_order(request)
-        await self.store.record_order(result)
-        ORDERS.labels(self.binding.name, "stop", result.status).inc()
-        if result.status not in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
-            raise RuntimeError(f"Stop rejected with status {result.status}")
-        self.position = replace(self.position, protected=True)
+        target = OrderRequest(
+            symbol=position.symbol,
+            side=position.side.exit_order_side,
+            order_type="TAKE_PROFIT_MARKET",
+            quantity=position.quantity,
+            client_order_id=client_order_id(self.binding.name, reference_time, "take"),
+            stop_price=self.risk.target_price(
+                position.entry_price, position.side.sign, self.rules.price_tick
+            ),
+            working_type="MARK_PRICE",
+            close_position=True,
+        )
+        stop_result = await self.exchange.submit_order(stop)
+        ORDERS.labels(self.binding.name, "stop", stop_result.status).inc()
+        if stop_result.status not in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
+            raise RuntimeError(f"Stop rejected with status {stop_result.status}")
+        target_result = await self.exchange.submit_order(target)
+        ORDERS.labels(self.binding.name, "target", target_result.status).inc()
+        if target_result.status not in {"NEW", "PARTIALLY_FILLED", "FILLED"}:
+            raise RuntimeError(f"Target rejected with status {target_result.status}")
 
-    async def _exit_if_expired(self, now: datetime) -> bool:
-        if not self.position.is_open or not self.position.opened_at:
-            return False
-        hold = timedelta(minutes=getattr(self.strategy, "maximum_hold_minutes", 120))
-        if now < self.position.opened_at + hold:
-            return False
-        await self.flatten("maximum_hold")
-        return True
-
-    async def flatten(self, reason: str) -> None:
-        if not self.position.is_open or not self.position.side:
+    async def flatten(self, position: PositionContext, reason: str) -> None:
+        del reason
+        if not position.is_open or not position.side:
             return
-        await self.exchange.cancel_all_orders(self.binding.symbol)
-        close_time = datetime.now(timezone.utc)
+        await self.exchange.cancel_all_orders(position.symbol)
         request = OrderRequest(
-            symbol=self.binding.symbol,
-            side=self.position.side.exit_order_side,
+            symbol=position.symbol,
+            side=position.side.exit_order_side,
             order_type="MARKET",
-            quantity=self.position.quantity,
-            client_order_id=client_order_id(self.binding.name, close_time, "exit"),
+            quantity=position.quantity,
+            client_order_id=client_order_id(
+                self.binding.name, datetime.now(timezone.utc), "exit"
+            ),
             reduce_only=True,
         )
-        await self.store.persist_order_intent(self.binding.name, request, "exit")
         result = await self.exchange.submit_order(request)
-        await self.store.record_order(result)
         ORDERS.labels(self.binding.name, "exit", result.status).inc()
-        self.position = PositionContext(self.binding.symbol)
-
-    async def _flatten_and_halt(self, reason: str) -> None:
-        try:
-            await self.flatten(reason)
-        finally:
-            self.halted_reason = reason
-            await self.store.set_runtime_state(
-                "control", {"paused": True, "reason": reason}
-            )
-
-    async def _reconcile_loop(self) -> None:
-        while self.running:
-            await asyncio.sleep(15)
-            try:
-                positions = [
-                    p for p in await self.exchange.positions()
-                    if p.symbol == self.binding.symbol
-                ]
-                orders = await self.exchange.open_orders(self.binding.symbol)
-                if self.position.is_open:
-                    if not positions:
-                        self.position = PositionContext(self.binding.symbol)
-                    elif not any(
-                        order.client_order_id.startswith("kr_stop_") for order in orders
-                    ):
-                        await self._flatten_and_halt("stop_missing_during_reconcile")
-                elif positions:
-                    if not await self.store.owns_symbol(self.binding.symbol):
-                        self.halted_reason = "unknown_position"
-                        await self.store.set_runtime_state(
-                            "control", {"paused": True, "reason": "unknown_position"}
-                        )
-            except Exception:
-                LOG.exception("reconciliation_failed", extra={"symbol": self.binding.symbol})
-
-    async def process_user_events(self) -> None:
-        async for event in self.exchange.user_stream():
-            event_type = event.get("e")
-            if event_type == "ORDER_TRADE_UPDATE":
-                order = event["o"]
-                client_id = order.get("c", "")
-                if not client_id.startswith("kr_"):
-                    continue
-                await self.store.update_order_event(order)
-                await self.store.record_trade_update(
-                    order,
-                    int(event["E"]),
-                    self.binding.risk.consecutive_loss_limit,
-                    self.binding.risk.loss_pause_hours,
-                )
-                if order.get("X") == "FILLED" and client_id.startswith("kr_stop_"):
-                    self.position = PositionContext(self.binding.symbol)
-            elif event_type == "ACCOUNT_UPDATE":
-                await self.store.record_account_event(event)
-                for balance in event.get("a", {}).get("B", []):
-                    if balance.get("a") == "USDT":
-                        LOG.info(
-                            "account_update",
-                            extra={"wallet_balance": balance.get("wb")},
-                        )

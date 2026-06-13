@@ -16,14 +16,14 @@ after all startup checks pass and the acknowledgement string matches exactly.
 
 Ubuntu 24.04, Docker Engine 27+, and Docker Compose v2 are expected. One vCPU
 and 4 GB RAM is the minimum target. Four vCPUs and 8 GB RAM are recommended so
-model inference, PostgreSQL, and reconnect recovery do not compete for memory.
+model inference and trading reconciliation do not compete for memory.
 
 ```bash
 git clone <your-repository> /opt/kronos-bot
 cd /opt/kronos-bot
 cp .env.example .env
 chmod 600 .env
-# Set POSTGRES_PASSWORD and choose paper/testnet/live first.
+# Choose paper/testnet/live and set Binance credentials when required.
 docker compose build --no-cache
 docker compose up -d --force-recreate
 docker compose ps
@@ -42,7 +42,6 @@ Use these commands before changing configuration:
 
 ```bash
 docker compose ps -a
-docker compose logs --tail=300 postgres
 docker compose logs --tail=300 inference
 docker compose logs --tail=300 trader
 docker compose run --rm trader kronos-bot --help
@@ -57,20 +56,14 @@ Common failures:
 - Trader repeatedly restarts: inspect the named preflight gate in trader logs.
 - Binance HTTP `451`/`403`: the VPS network location cannot access Binance
   Futures; deployment must use a permitted region and IP.
-- PostgreSQL authentication failure: remove an old test volume or use the
-  password that originally initialized it. Changing `POSTGRES_PASSWORD` does
-  not change the password inside an existing database volume.
 
-For a new paper deployment with disposable database state:
+For a clean rebuild:
 
 ```bash
 docker compose down
-docker volume rm bkng_postgres_data 2>/dev/null || true
 docker compose build --no-cache
 docker compose up -d --force-recreate
 ```
-
-Do not remove the database volume on a live deployment without a backup.
 
 ## Credentials
 
@@ -115,16 +108,14 @@ Run commands inside the trader container:
 
 ```bash
 docker compose exec trader kronos-bot status
-docker compose exec trader kronos-bot pause --reason maintenance
-docker compose exec trader kronos-bot resume
 docker compose exec trader kronos-bot reconcile --symbol BTCUSDT
-docker compose exec trader kronos-bot flatten --symbol BTCUSDT --reason operator
-docker compose exec trader kronos-bot kill --reason emergency
+docker compose exec trader kronos-bot flatten --symbol BTCUSDT
 ```
 
-`kill` prevents new entries. Use `flatten` as well when an open position must be
-closed. The health endpoint is bound to localhost by default; expose it through
-an authenticated monitoring tunnel rather than directly to the internet.
+Stop new entries with `docker compose stop trader`. Use `flatten` first when an
+open position must be closed. The health endpoint is bound to localhost by
+default; expose it through an authenticated monitoring tunnel rather than
+directly to the internet.
 
 ## Strategy and pair changes
 
@@ -140,12 +131,12 @@ must be independently validated per pair.
 
 ## Backups and updates
 
-Back up the `postgres-data` Docker volume before deployment changes. Model cache
-is disposable; database state is not. Stop cleanly with:
+The model cache is disposable. Open positions and protective orders are read
+directly from Binance after restart. Stop cleanly with:
 
 ```bash
 docker compose down
 ```
 
-Do not use `docker compose down -v` unless intentionally deleting database and
-model volumes.
+Do not use `docker compose down -v` unless intentionally deleting the model
+cache volume.

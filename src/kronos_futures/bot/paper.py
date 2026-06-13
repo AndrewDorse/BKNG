@@ -63,6 +63,7 @@ class PaperGateway:
             status=status,
             executed_quantity=Decimal(0) if status == "NEW" else request.quantity,
             average_price=Decimal(0) if status == "NEW" else price,
+            order_type=request.order_type,
         )
         self._next_order_id += 1
         self._orders[request.client_order_id] = result
@@ -72,7 +73,7 @@ class PaperGateway:
             else:
                 signed = request.quantity if request.side == "BUY" else -request.quantity
                 self._positions[request.symbol] = PositionSnapshot(
-                    request.symbol, signed, price, True, 45
+                    request.symbol, signed, price, True, 50
                 )
         return result
 

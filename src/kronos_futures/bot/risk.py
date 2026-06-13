@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
 from .domain import (
@@ -32,21 +31,12 @@ class GuardedRiskEngine:
         account: AccountContext,
         rules: SymbolRules,
     ) -> tuple[bool, str]:
-        now = datetime.now(timezone.utc)
         if intent.side is None:
             return False, intent.reason
-        if account.halted_until and account.halted_until > now:
-            return False, "risk_halt_active"
-        if account.daily_realized_pnl < -(account.peak_equity * Decimal(str(
-            self.settings.max_daily_loss_pct
-        ))):
-            return False, "daily_loss_limit"
         if account.peak_equity > 0:
             drawdown = (account.peak_equity - account.equity) / account.peak_equity
             if drawdown >= Decimal(str(self.settings.max_drawdown_pct)):
                 return False, "account_drawdown_limit"
-        if account.consecutive_losses >= self.settings.consecutive_loss_limit:
-            return False, "consecutive_loss_limit"
         age = (forecast.generated_at - market.last.close_time).total_seconds()
         if age < 0 or age > self.settings.maximum_signal_age_seconds:
             return False, "stale_forecast"
@@ -88,5 +78,11 @@ class GuardedRiskEngine:
     def stop_price(self, entry_price: Decimal, side_sign: int, tick: Decimal) -> Decimal:
         raw = entry_price * (
             Decimal(1) - Decimal(side_sign) * Decimal(str(self.settings.stop_pct))
+        )
+        return floor_to_step(raw, tick)
+
+    def target_price(self, entry_price: Decimal, side_sign: int, tick: Decimal) -> Decimal:
+        raw = entry_price * (
+            Decimal(1) + Decimal(side_sign) * Decimal(str(self.settings.target_pct))
         )
         return floor_to_step(raw, tick)

@@ -36,8 +36,7 @@ ENTRYPOINT ["/docker-entrypoint.sh"]
 FROM base AS trader
 
 COPY config /app/config
-COPY migrations /app/migrations
-RUN chown -R appuser:appuser /app/config /app/migrations
+RUN chown -R appuser:appuser /app/config
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \

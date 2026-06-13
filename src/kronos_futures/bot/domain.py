@@ -141,6 +141,7 @@ class OrderResult:
     status: str
     executed_quantity: Decimal
     average_price: Decimal
+    order_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,4 +151,3 @@ class PositionSnapshot:
     entry_price: Decimal
     isolated: bool
     leverage: int
-

@@ -20,7 +20,6 @@ from .inference import HttpInferenceClient
 from .paper import PaperGateway
 from .risk import GuardedRiskEngine
 from .settings import load_settings, load_strategy
-from .store import PostgresStore
 
 
 class JsonFormatter(logging.Formatter):
@@ -31,7 +30,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("symbol", "wallet_balance"):
+        for key in ("symbol", "outcome"):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
         if record.exc_info:
@@ -48,7 +47,6 @@ def configure_logging() -> None:
 class BotService:
     def __init__(self, config_path: Path):
         self.settings = load_settings(config_path)
-        self.store = PostgresStore(self.settings.database_url)
         self.inference = HttpInferenceClient(self.settings.inference_url)
         self.market = BinanceGateway(
             self.settings.binance_api_key,
@@ -64,55 +62,34 @@ class BotService:
             else self.market
         )
         self.engines: list[TradingEngine] = []
-        self.ready = False
         self.live = True
 
     async def start(self) -> None:
-        logging.getLogger(__name__).info("connecting_postgres")
-        await self.store.connect()
-        migrations = Path(os.getenv("MIGRATIONS_DIR", "/app/migrations"))
-        if not migrations.exists():
-            migrations = Path(__file__).resolve().parents[3] / "migrations"
-        await self.store.migrate(migrations)
-        logging.getLogger(__name__).info("database_migrations_complete")
         for binding in self.settings.bindings:
             if not binding.enabled:
                 continue
             strategy = load_strategy(binding.strategy, binding.parameters)
-            self.engines.append(
-                TradingEngine(
-                    binding,
-                    strategy,
-                    GuardedRiskEngine(binding.risk),
-                    self.exchange,
-                    self.inference,
-                    self.store,
-                )
+            engine = TradingEngine(
+                binding,
+                strategy,
+                GuardedRiskEngine(binding.risk),
+                self.exchange,
+                self.inference,
+                poll_seconds=self.settings.poll_seconds,
             )
-        for engine in self.engines:
-            logging.getLogger(__name__).info(
-                "running_preflight", extra={"symbol": engine.binding.symbol}
-            )
-            await engine.preflight()
-            logging.getLogger(__name__).info(
-                "preflight_complete", extra={"symbol": engine.binding.symbol}
-            )
-        self.ready = True
-        tasks = []
-        for engine in self.engines:
-            tasks.append(asyncio.create_task(engine.run_after_preflight()))
-            if self.settings.mode is not TradingMode.PAPER:
-                tasks.append(asyncio.create_task(engine.process_user_events()))
-        await asyncio.gather(*tasks)
+            self.engines.append(engine)
+        await asyncio.gather(*(engine.run() for engine in self.engines))
 
     async def stop(self) -> None:
         self.live = False
-        self.ready = False
         for engine in self.engines:
             engine.running = False
         await self.inference.close()
         await self.market.close()
-        await self.store.close()
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.engines) and all(engine.ready for engine in self.engines)
 
 
 def health_app(service: BotService) -> FastAPI:

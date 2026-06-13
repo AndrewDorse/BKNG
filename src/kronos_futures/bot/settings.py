@@ -16,10 +16,8 @@ class RiskSettings:
     leverage: int = 45
     margin_fraction: float = 0.10
     stop_pct: float = 0.01
-    max_daily_loss_pct: float = 0.15
+    target_pct: float = 0.01
     max_drawdown_pct: float = 0.25
-    consecutive_loss_limit: int = 3
-    loss_pause_hours: int = 6
     maximum_signal_age_seconds: int = 10
     maximum_price_drift_pct: float = 0.001
     maximum_spread_pct: float = 0.0002
@@ -41,7 +39,6 @@ class BindingSettings:
 @dataclass(frozen=True)
 class BotSettings:
     mode: TradingMode
-    database_url: str
     inference_url: str
     binance_api_key: str
     binance_api_secret: str
@@ -51,6 +48,7 @@ class BotSettings:
     allow_research_full_margin_live: bool
     health_host: str
     health_port: int
+    poll_seconds: int
     bindings: tuple[BindingSettings, ...]
 
     @property
@@ -85,7 +83,6 @@ def load_settings(path: str | Path) -> BotSettings:
     )
     settings = BotSettings(
         mode=TradingMode(os.getenv("TRADING_MODE", raw.get("mode", "paper"))),
-        database_url=os.getenv("DATABASE_URL", raw["database_url"]),
         inference_url=os.getenv("INFERENCE_URL", raw.get("inference_url", "http://inference:8081")),
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_api_secret=os.getenv("BINANCE_API_SECRET", ""),
@@ -99,6 +96,7 @@ def load_settings(path: str | Path) -> BotSettings:
         ),
         health_host=raw.get("health", {}).get("host", "0.0.0.0"),
         health_port=int(raw.get("health", {}).get("port", 8080)),
+        poll_seconds=int(os.getenv("POLL_SECONDS", raw.get("poll_seconds", 30))),
         bindings=bindings,
     )
     validate_settings(settings)
@@ -117,6 +115,8 @@ def validate_settings(settings: BotSettings) -> None:
         not settings.binance_api_key or not settings.binance_api_secret
     ):
         raise ValueError("Testnet and live modes require Binance API credentials")
+    if settings.poll_seconds < 5:
+        raise ValueError("poll_seconds must be at least 5")
     for binding in enabled:
         if not binding.validated and not settings.allow_unvalidated_pairs:
             raise ValueError(f"{binding.symbol} is unvalidated; set ALLOW_UNVALIDATED_PAIRS=true")
