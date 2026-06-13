@@ -22,7 +22,7 @@ bindings:
     risk:
       profile: optimized_guarded
       leverage: 50
-      margin_fraction: 0.32
+      margin_fraction: 0.10
       stop_pct: 0.007
       target_pct: 0.01
       max_drawdown_pct: 0.25

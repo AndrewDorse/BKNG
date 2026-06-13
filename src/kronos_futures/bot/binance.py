@@ -153,7 +153,7 @@ class BinanceGateway:
                 quantity=Decimal(item["positionAmt"]),
                 entry_price=Decimal(item["entryPrice"]),
                 isolated=item.get("marginType", "isolated").lower() == "isolated",
-                leverage=int(item["leverage"]),
+                leverage=int(item.get("leverage", "0")),
             )
             for item in payload
             if Decimal(item["positionAmt"]) != 0

@@ -38,7 +38,7 @@ def test_symbol_is_isolated_accepts_no_change_needed():
     assert asyncio.run(gateway.symbol_is_isolated("BTCUSDT")) is True
 
 
-def test_positions_accepts_v3_payload_without_margin_type():
+def test_positions_accepts_v3_payload_without_optional_metadata():
     gateway = object.__new__(BinanceGateway)
 
     async def request(method, path, params=None, *, signed=False, retries=3):
@@ -47,7 +47,6 @@ def test_positions_accepts_v3_payload_without_margin_type():
                 "symbol": "BTCUSDT",
                 "positionAmt": "0.001",
                 "entryPrice": "60000",
-                "leverage": "50",
             }
         ]
 
@@ -58,3 +57,4 @@ def test_positions_accepts_v3_payload_without_margin_type():
     assert len(positions) == 1
     assert positions[0].quantity == Decimal("0.001")
     assert positions[0].isolated is True
+    assert positions[0].leverage == 0
