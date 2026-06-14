@@ -151,3 +151,4 @@ class PositionSnapshot:
     entry_price: Decimal
     isolated: bool
     leverage: int
+    opened_at: datetime | None = None

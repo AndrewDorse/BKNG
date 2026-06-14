@@ -15,6 +15,7 @@ from .domain import TradingMode
 class RiskSettings:
     leverage: int = 45
     margin_fraction: float = 0.10
+    fixed_margin_usdt: float | None = None
     stop_pct: float = 0.01
     target_pct: float = 0.01
     max_drawdown_pct: float = 0.25
@@ -118,6 +119,15 @@ def validate_settings(settings: BotSettings) -> None:
     if settings.poll_seconds < 5:
         raise ValueError("poll_seconds must be at least 5")
     for binding in enabled:
+        if not 1 <= binding.risk.leverage <= 50:
+            raise ValueError("Live bot leverage must be between 1x and 50x")
+        if not 0 < binding.risk.margin_fraction <= 1:
+            raise ValueError("margin_fraction must be greater than 0 and at most 1")
+        if (
+            binding.risk.fixed_margin_usdt is not None
+            and binding.risk.fixed_margin_usdt <= 0
+        ):
+            raise ValueError("fixed_margin_usdt must be positive when configured")
         if not binding.validated and not settings.allow_unvalidated_pairs:
             raise ValueError(f"{binding.symbol} is unvalidated; set ALLOW_UNVALIDATED_PAIRS=true")
         if (

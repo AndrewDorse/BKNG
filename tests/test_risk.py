@@ -57,3 +57,44 @@ def test_entry_quantity_raises_small_order_to_exchange_minimum():
     risk = GuardedRiskEngine(RiskSettings(leverage=50, margin_fraction=0.10))
 
     assert risk.entry_quantity(account, market, rules) == Decimal("0.001")
+
+
+def test_entry_quantity_uses_fixed_margin_without_compounding():
+    account, market, rules = contexts("100", "50000")
+    risk = GuardedRiskEngine(
+        RiskSettings(
+            leverage=50,
+            margin_fraction=1.0,
+            fixed_margin_usdt=20.0,
+        )
+    )
+
+    first = risk.entry_quantity(account, market, rules)
+    larger_account = AccountContext(
+        equity=Decimal("1000"),
+        available_balance=Decimal("1000"),
+        peak_equity=Decimal("1000"),
+        daily_realized_pnl=Decimal(0),
+        consecutive_losses=0,
+    )
+    second = risk.entry_quantity(larger_account, market, rules)
+
+    assert first == Decimal("0.020")
+    assert second == first
+
+
+def test_entry_quantity_uses_half_available_balance():
+    account, market, rules = contexts("10", "64000")
+    risk = GuardedRiskEngine(
+        RiskSettings(
+            leverage=50,
+            margin_fraction=0.50,
+        )
+    )
+
+    quantity = risk.entry_quantity(account, market, rules)
+    required_margin = quantity * market.ask / Decimal(50)
+
+    assert quantity == Decimal("0.003")
+    assert required_margin == Decimal("3.840")
+    assert required_margin <= account.available_balance * Decimal("0.50")

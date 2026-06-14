@@ -38,6 +38,8 @@ class JsonFormatter(logging.Formatter):
             "quantity",
             "price",
             "reason",
+            "leverage",
+            "margin_fraction",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)

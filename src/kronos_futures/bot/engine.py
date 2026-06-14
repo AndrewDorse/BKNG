@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import logging
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from prometheus_client import Counter, Gauge, Histogram
 
@@ -50,6 +50,9 @@ class TradingEngine:
         self.last_analyzed_candle: datetime | None = None
         self.peak_equity = None
         self.last_position: PositionContext | None = None
+        self.maximum_hold_minutes = int(
+            self.binding.parameters.get("maximum_hold_minutes", 60)
+        )
 
     async def preflight(self) -> None:
         attempts = 0
@@ -88,6 +91,8 @@ class TradingEngine:
             extra={
                 "symbol": self.binding.symbol,
                 "mode": self.exchange.mode.value,
+                "leverage": self.binding.risk.leverage,
+                "margin_fraction": self.binding.risk.margin_fraction,
             },
         )
 
@@ -108,6 +113,14 @@ class TradingEngine:
 
     async def cycle(self) -> None:
         position = await self.reconcile()
+        if (
+            position.is_open
+            and position.opened_at is not None
+            and datetime.now(timezone.utc) - position.opened_at
+            >= timedelta(minutes=self.maximum_hold_minutes)
+        ):
+            await self.flatten(position, "maximum_hold")
+            return
         candles = await self.exchange.klines(
             self.binding.symbol, self.binding.interval, limit=513
         )
@@ -179,6 +192,7 @@ class TradingEngine:
             side=side,
             quantity=abs(snapshot.quantity),
             entry_price=snapshot.entry_price,
+            opened_at=snapshot.opened_at,
             protected=False,
         )
         stop_exists = any(
@@ -227,6 +241,7 @@ class TradingEngine:
             intent.side,
             result.executed_quantity,
             result.average_price,
+            datetime.now(timezone.utc),
         )
         try:
             await self.place_protection(position, intent.candle_close_time)

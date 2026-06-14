@@ -154,6 +154,11 @@ class BinanceGateway:
                 entry_price=Decimal(item["entryPrice"]),
                 isolated=item.get("marginType", "isolated").lower() == "isolated",
                 leverage=int(item.get("leverage", "0")),
+                opened_at=(
+                    datetime.fromtimestamp(int(item["updateTime"]) / 1000, timezone.utc)
+                    if int(item.get("updateTime", "0")) > 0
+                    else None
+                ),
             )
             for item in payload
             if Decimal(item["positionAmt"]) != 0
@@ -185,12 +190,37 @@ class BinanceGateway:
             order_type=payload.get("type", ""),
         )
 
+    @staticmethod
+    def _algo_order_result(payload: dict[str, Any]) -> OrderResult:
+        return OrderResult(
+            symbol=payload["symbol"],
+            client_order_id=payload["clientAlgoId"],
+            order_id=int(payload["algoId"]),
+            status=payload.get("algoStatus", "NEW"),
+            executed_quantity=Decimal(payload.get("actualQty", "0") or "0"),
+            average_price=Decimal(payload.get("actualPrice", "0") or "0"),
+            order_type=payload.get("orderType", payload.get("type", "")),
+        )
+
     async def open_orders(self, symbol: str | None = None) -> list[OrderResult]:
         params = {"symbol": symbol} if symbol else {}
-        payload = await self._request("GET", "/fapi/v1/openOrders", params, signed=True)
-        return [self._order_result(item) for item in payload]
+        regular, algo = await asyncio.gather(
+            self._request("GET", "/fapi/v1/openOrders", params, signed=True),
+            self._request(
+                "GET",
+                "/fapi/v1/openAlgoOrders",
+                {**params, "algoType": "CONDITIONAL"},
+                signed=True,
+            ),
+        )
+        return [
+            *[self._order_result(item) for item in regular],
+            *[self._algo_order_result(item) for item in algo],
+        ]
 
     async def submit_order(self, request: OrderRequest) -> OrderResult:
+        if request.order_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}:
+            return await self._submit_algo_order(request)
         params = {
             "symbol": request.symbol,
             "side": request.side,
@@ -212,6 +242,49 @@ class BinanceGateway:
             payload = await self._request("POST", "/fapi/v1/order", params, signed=True, retries=1)
         return self._order_result(payload)
 
+    async def _submit_algo_order(self, request: OrderRequest) -> OrderResult:
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": request.symbol,
+            "side": request.side,
+            "type": request.order_type,
+            "quantity": None if request.close_position else request.quantity,
+            "clientAlgoId": request.client_order_id,
+            "triggerPrice": request.stop_price,
+            "workingType": request.working_type,
+            "closePosition": (
+                str(request.close_position).lower() if request.close_position else None
+            ),
+            "reduceOnly": str(request.reduce_only).lower() if request.reduce_only else None,
+            "newOrderRespType": "ACK",
+        }
+        try:
+            payload = await self._request(
+                "POST", "/fapi/v1/algoOrder", params, signed=True, retries=1
+            )
+        except (httpx.TimeoutException, httpx.NetworkError):
+            existing = await self.query_algo_order(request.client_order_id)
+            if existing:
+                return existing
+            payload = await self._request(
+                "POST", "/fapi/v1/algoOrder", params, signed=True, retries=1
+            )
+        return self._algo_order_result(payload)
+
+    async def query_algo_order(self, client_order_id: str) -> OrderResult | None:
+        try:
+            payload = await self._request(
+                "GET",
+                "/fapi/v1/algoOrder",
+                {"clientAlgoId": client_order_id},
+                signed=True,
+            )
+        except BinanceError as exc:
+            if exc.code in {-2013, -2021}:
+                return None
+            raise
+        return self._algo_order_result(payload)
+
     async def query_order(self, symbol: str, client_order_id: str) -> OrderResult | None:
         try:
             payload = await self._request(
@@ -227,8 +300,13 @@ class BinanceGateway:
         return self._order_result(payload)
 
     async def cancel_all_orders(self, symbol: str) -> None:
-        await self._request(
-            "DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True
+        await asyncio.gather(
+            self._request(
+                "DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol}, signed=True
+            ),
+            self._request(
+                "DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol}, signed=True
+            ),
         )
 
     async def start_user_stream(self) -> str:

@@ -71,12 +71,15 @@ class GuardedRiskEngine:
         market: MarketContext,
         rules: SymbolRules,
     ) -> Decimal:
-        fraction = (
-            Decimal(1)
-            if self.settings.profile == "research_full_margin"
-            else Decimal(str(self.settings.margin_fraction))
-        )
-        margin = account.available_balance * fraction
+        if self.settings.fixed_margin_usdt is not None:
+            margin = Decimal(str(self.settings.fixed_margin_usdt))
+        else:
+            fraction = (
+                Decimal(1)
+                if self.settings.profile == "research_full_margin"
+                else Decimal(str(self.settings.margin_fraction))
+            )
+            margin = account.available_balance * fraction
         notional = margin * Decimal(self.settings.leverage)
         price = market.ask
         raw = notional / price if price > 0 else Decimal(0)
