@@ -1,6 +1,8 @@
 import asyncio
 from decimal import Decimal
 
+import httpx
+
 from kronos_futures.bot.binance import BinanceGateway
 from kronos_futures.bot.domain import OrderRequest
 
@@ -135,3 +137,59 @@ def test_cancel_all_orders_cancels_regular_and_algo_orders():
     asyncio.run(gateway.cancel_all_orders("BTCUSDT"))
 
     assert set(paths) == {"/fapi/v1/allOpenOrders", "/fapi/v1/algoOpenOrders"}
+
+
+def test_get_request_retries_transient_read_timeout():
+    gateway = object.__new__(BinanceGateway)
+    gateway.api_key = ""
+    gateway.api_secret = b""
+    gateway.rest_base = "https://example.test"
+    gateway.time_offset_ms = 0
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def request(self, method, url, params=None, headers=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.ReadTimeout("temporary")
+            return httpx.Response(
+                200,
+                json={"ok": True},
+                request=httpx.Request(method, url),
+            )
+
+    gateway.client = Client()
+
+    result = asyncio.run(gateway._request("GET", "/fapi/v1/klines", retries=2))
+
+    assert result == {"ok": True}
+    assert gateway.client.calls == 2
+
+
+def test_post_request_does_not_retry_transport_failure():
+    gateway = object.__new__(BinanceGateway)
+    gateway.api_key = ""
+    gateway.api_secret = b""
+    gateway.rest_base = "https://example.test"
+    gateway.time_offset_ms = 0
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def request(self, method, url, params=None, headers=None):
+            self.calls += 1
+            raise httpx.ReadTimeout("unknown submission state")
+
+    gateway.client = Client()
+
+    try:
+        asyncio.run(gateway._request("POST", "/fapi/v1/order", retries=3))
+    except httpx.ReadTimeout:
+        pass
+    else:
+        raise AssertionError("POST timeout must propagate for client-ID reconciliation")
+
+    assert gateway.client.calls == 1

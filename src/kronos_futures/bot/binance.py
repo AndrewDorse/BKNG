@@ -49,7 +49,9 @@ class BinanceGateway:
         self.mode = mode
         self.rest_base = self.TESTNET_REST if mode is TradingMode.TESTNET else self.LIVE_REST
         self.ws_base = self.TESTNET_WS if mode is TradingMode.TESTNET else self.LIVE_WS
-        self.client = httpx.AsyncClient(timeout=timeout_seconds)
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_seconds, read=max(timeout_seconds, 10.0))
+        )
         self.time_offset_ms = 0
         self._rules: dict[str, SymbolRules] = {}
 
@@ -74,10 +76,18 @@ class BinanceGateway:
             values["signature"] = hmac.new(
                 self.api_secret, query.encode(), hashlib.sha256
             ).hexdigest()
+        last_transport_error: httpx.HTTPError | None = None
         for attempt in range(retries):
-            response = await self.client.request(
-                method, self.rest_base + path, params=values, headers=headers
-            )
+            try:
+                response = await self.client.request(
+                    method, self.rest_base + path, params=values, headers=headers
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_transport_error = exc
+                if method.upper() != "GET" or attempt == retries - 1:
+                    raise
+                await asyncio.sleep(min(2**attempt, 4))
+                continue
             if response.status_code < 400:
                 return response.json()
             body = response.json()
@@ -94,6 +104,8 @@ class BinanceGateway:
                 await asyncio.sleep(min(2**attempt, 8))
                 continue
             raise BinanceError(response.status_code, code, body.get("msg", response.text))
+        if last_transport_error is not None:
+            raise last_transport_error
         raise BinanceError(response.status_code, body.get("code"), body.get("msg", response.text))
 
     async def synchronize_time(self) -> None:
