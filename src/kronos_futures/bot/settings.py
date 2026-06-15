@@ -41,6 +41,7 @@ class BindingSettings:
 class BotSettings:
     mode: TradingMode
     inference_url: str
+    inference_timeout_seconds: float
     binance_api_key: str
     binance_api_secret: str
     live_acknowledgement: str
@@ -85,6 +86,7 @@ def load_settings(path: str | Path) -> BotSettings:
     settings = BotSettings(
         mode=TradingMode(os.getenv("TRADING_MODE", raw.get("mode", "paper"))),
         inference_url=os.getenv("INFERENCE_URL", raw.get("inference_url", "http://inference:8081")),
+        inference_timeout_seconds=float(os.getenv("INFERENCE_TIMEOUT_SECONDS", "60")),
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_api_secret=os.getenv("BINANCE_API_SECRET", ""),
         live_acknowledgement=os.getenv("LIVE_RISK_ACKNOWLEDGEMENT", ""),
@@ -118,6 +120,8 @@ def validate_settings(settings: BotSettings) -> None:
         raise ValueError("Testnet and live modes require Binance API credentials")
     if settings.poll_seconds < 5:
         raise ValueError("poll_seconds must be at least 5")
+    if settings.inference_timeout_seconds < 10:
+        raise ValueError("INFERENCE_TIMEOUT_SECONDS must be at least 10")
     for binding in enabled:
         if not 1 <= binding.risk.leverage <= 50:
             raise ValueError("Live bot leverage must be between 1x and 50x")

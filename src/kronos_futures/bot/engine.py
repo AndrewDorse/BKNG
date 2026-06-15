@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from prometheus_client import Counter, Gauge, Histogram
+import httpx
 
 from .domain import MarketContext, OrderRequest, PositionContext, Side
 from .risk import GuardedRiskEngine
@@ -50,6 +51,8 @@ class TradingEngine:
         self.last_analyzed_candle: datetime | None = None
         self.peak_equity = None
         self.last_position: PositionContext | None = None
+        self.last_successful_analysis: datetime | None = None
+        self.last_analysis_error: str | None = None
         self.maximum_hold_minutes = int(
             self.binding.parameters.get("maximum_hold_minutes", 60)
         )
@@ -103,7 +106,17 @@ class TradingEngine:
                 started = asyncio.get_running_loop().time()
                 try:
                     await self.cycle()
+                except httpx.TimeoutException as exc:
+                    self.last_analysis_error = type(exc).__name__
+                    LOG.error(
+                        "analysis_cycle_timeout",
+                        extra={
+                            "symbol": self.binding.symbol,
+                            "reason": type(exc).__name__,
+                        },
+                    )
                 except Exception:
+                    self.last_analysis_error = "analysis_cycle_failed"
                     LOG.exception("analysis_cycle_failed", extra={"symbol": self.binding.symbol})
                 elapsed = asyncio.get_running_loop().time() - started
                 await asyncio.sleep(max(1, self.poll_seconds - elapsed))
@@ -148,6 +161,8 @@ class TradingEngine:
         )
         started = asyncio.get_running_loop().time()
         forecast = await self.inference.forecast(market)
+        self.last_successful_analysis = datetime.now(timezone.utc)
+        self.last_analysis_error = None
         INFERENCE.labels(self.binding.name).observe(
             asyncio.get_running_loop().time() - started
         )

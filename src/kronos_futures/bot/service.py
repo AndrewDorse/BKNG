@@ -60,7 +60,10 @@ def configure_logging() -> None:
 class BotService:
     def __init__(self, config_path: Path):
         self.settings = load_settings(config_path)
-        self.inference = HttpInferenceClient(self.settings.inference_url)
+        self.inference = HttpInferenceClient(
+            self.settings.inference_url,
+            timeout_seconds=self.settings.inference_timeout_seconds,
+        )
         self.market = BinanceGateway(
             self.settings.binance_api_key,
             self.settings.binance_api_secret,
@@ -126,7 +129,31 @@ def health_app(service: BotService) -> FastAPI:
     async def ready():
         if not service.ready:
             raise HTTPException(503, "startup gates have not passed")
-        return {"ready": True, "bindings": [e.binding.name for e in service.engines]}
+        return {
+            "ready": True,
+            "bindings": [
+                {
+                    "name": engine.binding.name,
+                    "symbol": engine.binding.symbol,
+                    "last_analyzed_candle": (
+                        engine.last_analyzed_candle.isoformat()
+                        if engine.last_analyzed_candle
+                        else None
+                    ),
+                    "last_successful_analysis": (
+                        engine.last_successful_analysis.isoformat()
+                        if engine.last_successful_analysis
+                        else None
+                    ),
+                    "last_analysis_error": engine.last_analysis_error,
+                    "position_open": bool(
+                        engine.last_position and engine.last_position.is_open
+                    ),
+                    "halted_reason": engine.halted_reason,
+                }
+                for engine in service.engines
+            ],
+        }
 
     @app.get("/metrics")
     async def metrics():

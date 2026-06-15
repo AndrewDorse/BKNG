@@ -42,7 +42,7 @@ class InferenceRuntime:
         self.config = ForecastConfig(
             context=512,
             horizon=1,
-            samples=16,
+            samples=max(2, int(os.getenv("KRONOS_SAMPLES", "4"))),
             temperature=1.0,
             top_p=0.9,
             top_k=0,
@@ -105,7 +105,7 @@ class InferenceRuntime:
         latencies = [self.forecast(request)["latency_ms"] for _ in range(runs)]
         self.p95_ms = sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)]
         self.available_memory_mb = psutil.virtual_memory().available // (1024 * 1024)
-        maximum_latency = int(os.getenv("MAX_INFERENCE_P95_MS", "20000"))
+        maximum_latency = int(os.getenv("MAX_INFERENCE_P95_MS", "10000"))
         minimum_memory_mb = int(os.getenv("MIN_AVAILABLE_MEMORY_MB", "512"))
         failures = []
         if self.p95_ms > maximum_latency:
@@ -117,7 +117,9 @@ class InferenceRuntime:
         self.readiness_error = "; ".join(failures) or None
         self.ready = not failures
         LOG.info(
-            "inference_benchmark_complete runs=%s p95_ms=%s available_memory_mb=%s ready=%s",
+            "inference_benchmark_complete samples=%s runs=%s p95_ms=%s "
+            "available_memory_mb=%s ready=%s",
+            self.config.samples,
             runs,
             self.p95_ms,
             self.available_memory_mb,
@@ -170,6 +172,7 @@ class HttpInferenceClient:
 runtime: InferenceRuntime | None = None
 initialization_error: str | None = None
 initialization_task: asyncio.Task | None = None
+forecast_lock = asyncio.Lock()
 app = FastAPI(title="Kronos inference", docs_url=None, redoc_url=None)
 
 
@@ -196,8 +199,11 @@ async def startup() -> None:
 async def forecast(request: ForecastRequest):
     if runtime is None or not runtime.ready:
         raise HTTPException(503, "Inference runtime is not ready")
+    if forecast_lock.locked():
+        raise HTTPException(429, "Inference is already processing a forecast")
     try:
-        return await asyncio.to_thread(runtime.forecast, request)
+        async with forecast_lock:
+            return await asyncio.to_thread(runtime.forecast, request)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -221,6 +227,7 @@ async def ready():
         raise HTTPException(503, detail or "Model benchmark has not passed")
     return {
         "ready": True,
+        "samples": runtime.config.samples,
         "p95_ms": runtime.p95_ms,
         "available_memory_mb": runtime.available_memory_mb,
     }
