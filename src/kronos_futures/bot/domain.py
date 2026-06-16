@@ -52,6 +52,7 @@ class MarketContext:
     bid: Decimal
     ask: Decimal
     observed_at: datetime
+    multi_timeframe: Mapping[str, tuple[Candle, ...]] = MappingProxyType({})
 
     @property
     def last(self) -> Candle:
@@ -107,6 +108,9 @@ class SignalIntent:
     reason: str
     confidence: Decimal = Decimal(0)
     metadata: Mapping[str, str] = MappingProxyType({})
+    target_pct: Decimal | None = None
+    stop_pct: Decimal | None = None
+    max_hold_minutes: int | None = None
 
 
 @dataclass(frozen=True)

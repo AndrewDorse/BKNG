@@ -9,9 +9,10 @@ from datetime import datetime, timedelta, timezone
 from prometheus_client import Counter, Gauge, Histogram
 import httpx
 
-from .domain import MarketContext, OrderRequest, PositionContext, Side
+from .domain import ForecastContext, MarketContext, OrderRequest, PositionContext, Side
 from .risk import GuardedRiskEngine
 from .settings import BindingSettings
+from .strategies import INTERVAL_SECONDS
 
 LOG = logging.getLogger(__name__)
 SIGNALS = Counter("kronos_bot_signals_total", "Strategy signals", ["binding", "outcome"])
@@ -36,6 +37,13 @@ def contiguous(candles, interval_seconds: int, required: int = 512) -> bool:
     )
 
 
+def interval_seconds(interval: str) -> int:
+    try:
+        return INTERVAL_SECONDS[interval]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported interval: {interval}") from exc
+
+
 class TradingEngine:
     def __init__(self, binding, strategy, risk, exchange, inference, poll_seconds: int = 30):
         self.binding: BindingSettings = binding
@@ -49,26 +57,44 @@ class TradingEngine:
         self.ready = False
         self.halted_reason: str | None = None
         self.last_analyzed_candle: datetime | None = None
+        self.last_analyzed_by_interval: dict[str, datetime] = {}
         self.peak_equity = None
         self.last_position: PositionContext | None = None
         self.last_successful_analysis: datetime | None = None
         self.last_analysis_error: str | None = None
+        self.current_max_hold_minutes: int | None = None
         self.maximum_hold_minutes = int(
             self.binding.parameters.get("maximum_hold_minutes", 60)
         )
 
+    @property
+    def requires_inference(self) -> bool:
+        return bool(getattr(self.strategy, "requires_inference", True))
+
+    @property
+    def required_intervals(self) -> tuple[str, ...]:
+        intervals = getattr(self.strategy, "required_intervals", None)
+        if intervals:
+            return tuple(intervals)
+        return (self.binding.interval,)
+
+    @property
+    def required_candles(self) -> int:
+        return int(getattr(self.strategy, "required_candles", 512))
+
     async def preflight(self) -> None:
-        attempts = 0
-        while self.running and not await self.inference.ready():
-            attempts += 1
-            if attempts == 1 or attempts % 6 == 0:
-                LOG.info(
-                    "waiting_for_inference",
-                    extra={"symbol": self.binding.symbol, "attempt": attempts},
-                )
-            await asyncio.sleep(10)
-        if not self.running:
-            raise RuntimeError("Trader stopped while waiting for inference")
+        if self.requires_inference:
+            attempts = 0
+            while self.running and not await self.inference.ready():
+                attempts += 1
+                if attempts == 1 or attempts % 6 == 0:
+                    LOG.info(
+                        "waiting_for_inference",
+                        extra={"symbol": self.binding.symbol, "attempt": attempts},
+                    )
+                await asyncio.sleep(10)
+            if not self.running:
+                raise RuntimeError("Trader stopped while waiting for inference")
         await self.exchange.synchronize_time()
         if not await self.exchange.position_mode_is_one_way():
             raise RuntimeError("Binance account must use one-way position mode")
@@ -80,12 +106,16 @@ class TradingEngine:
         if self.binding.risk.leverage > self.rules.maximum_leverage:
             raise RuntimeError("Configured leverage exceeds symbol limit")
         await self.exchange.set_leverage(self.binding.symbol, self.binding.risk.leverage)
-        candles = await self.exchange.klines(
-            self.binding.symbol, self.binding.interval, limit=513
-        )
-        candles = candles[-512:]
-        if not contiguous(candles, 60):
-            raise RuntimeError("Initial candle history is not contiguous")
+        required = self.required_candles
+        for interval in self.required_intervals:
+            candles = await self.exchange.klines(
+                self.binding.symbol, interval, limit=required + 1
+            )
+            candles = tuple(candles[-required:])
+            if not contiguous(candles, interval_seconds(interval), required):
+                raise RuntimeError(
+                    f"Initial {interval} candle history is not contiguous for {self.binding.symbol}"
+                )
         await self.reconcile()
         self.ready = True
         READY.labels(self.binding.name).set(1)
@@ -130,19 +160,32 @@ class TradingEngine:
             position.is_open
             and position.opened_at is not None
             and datetime.now(timezone.utc) - position.opened_at
-            >= timedelta(minutes=self.maximum_hold_minutes)
+            >= timedelta(minutes=self.current_max_hold_minutes or self.maximum_hold_minutes)
         ):
             await self.flatten(position, "maximum_hold")
             return
-        candles = await self.exchange.klines(
-            self.binding.symbol, self.binding.interval, limit=513
-        )
-        candles = candles[-512:]
-        if not contiguous(candles, 60):
-            raise RuntimeError("Binance returned non-contiguous candle history")
-        latest = candles[-1]
-        if self.last_analyzed_candle == latest.open_time:
+        required = self.required_candles
+        new_contexts: dict[str, tuple] = {}
+        for interval in self.required_intervals:
+            candles = tuple(
+                (await self.exchange.klines(
+                    self.binding.symbol, interval, limit=required + 1
+                ))[-required:]
+            )
+            if not contiguous(candles, interval_seconds(interval), required):
+                raise RuntimeError(
+                    f"Binance returned non-contiguous {interval} candle history"
+                )
+            latest = candles[-1]
+            if self.last_analyzed_by_interval.get(interval) != latest.open_time:
+                new_contexts[interval] = candles
+        if not new_contexts:
             return
+        for interval, candles in new_contexts.items():
+            self.last_analyzed_by_interval[interval] = candles[-1].open_time
+        primary_interval = next(iter(new_contexts))
+        candles = new_contexts[primary_interval]
+        latest = candles[-1]
         self.last_analyzed_candle = latest.open_time
         if position.is_open or self.halted_reason:
             return
@@ -153,19 +196,28 @@ class TradingEngine:
         account = replace(account, peak_equity=self.peak_equity)
         market = MarketContext(
             self.binding.symbol,
-            self.binding.interval,
+            primary_interval,
             candles,
             bid,
             ask,
             datetime.now(timezone.utc),
+            multi_timeframe=new_contexts,
         )
-        started = asyncio.get_running_loop().time()
-        forecast = await self.inference.forecast(market)
+        if self.requires_inference:
+            started = asyncio.get_running_loop().time()
+            forecast = await self.inference.forecast(market)
+            INFERENCE.labels(self.binding.name).observe(
+                asyncio.get_running_loop().time() - started
+            )
+        else:
+            forecast = ForecastContext(
+                generated_at=datetime.now(timezone.utc),
+                close_paths=(market.last.close,),
+                seed=0,
+                latency_ms=0,
+            )
         self.last_successful_analysis = datetime.now(timezone.utc)
         self.last_analysis_error = None
-        INFERENCE.labels(self.binding.name).observe(
-            asyncio.get_running_loop().time() - started
-        )
         intent = self.strategy.evaluate(market, forecast, position, account)
         approved, reason = self.risk.approve_entry(
             intent, market, forecast, account, self.rules
@@ -259,12 +311,18 @@ class TradingEngine:
             datetime.now(timezone.utc),
         )
         try:
-            await self.place_protection(position, intent.candle_close_time)
+            await self.place_protection(
+                position,
+                intent.candle_close_time,
+                target_pct=intent.target_pct,
+                stop_pct=intent.stop_pct,
+            )
         except Exception:
             await self.flatten(position, "protection_failed")
             self.halted_reason = "protection_failed"
             raise
         self.last_position = replace(position, protected=True)
+        self.current_max_hold_minutes = intent.max_hold_minutes
         LOG.info(
             "deal_opened",
             extra={
@@ -276,7 +334,11 @@ class TradingEngine:
         )
 
     async def place_protection(
-        self, position: PositionContext, reference_time: datetime
+        self,
+        position: PositionContext,
+        reference_time: datetime,
+        target_pct=None,
+        stop_pct=None,
     ) -> None:
         assert position.side and self.rules
         stop = OrderRequest(
@@ -286,7 +348,10 @@ class TradingEngine:
             quantity=position.quantity,
             client_order_id=client_order_id(self.binding.name, reference_time, "stop"),
             stop_price=self.risk.stop_price(
-                position.entry_price, position.side.sign, self.rules.price_tick
+                position.entry_price,
+                position.side.sign,
+                self.rules.price_tick,
+                stop_pct=stop_pct,
             ),
             working_type="MARK_PRICE",
             close_position=True,
@@ -298,7 +363,10 @@ class TradingEngine:
             quantity=position.quantity,
             client_order_id=client_order_id(self.binding.name, reference_time, "take"),
             stop_price=self.risk.target_price(
-                position.entry_price, position.side.sign, self.rules.price_tick
+                position.entry_price,
+                position.side.sign,
+                self.rules.price_tick,
+                target_pct=target_pct,
             ),
             working_type="MARK_PRICE",
             close_position=True,
@@ -340,3 +408,4 @@ class TradingEngine:
                 },
             )
             self.last_position = None
+            self.current_max_hold_minutes = None

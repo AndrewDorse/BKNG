@@ -1,5 +1,7 @@
 services:
   inference:
+    profiles:
+      - kronos
     build:
       context: .
       target: inference
@@ -32,9 +34,6 @@ services:
       PAPER_STARTING_EQUITY: ${PAPER_STARTING_EQUITY:-20}
       POLL_SECONDS: ${POLL_SECONDS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      inference:
-        condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
     stop_grace_period: 30s

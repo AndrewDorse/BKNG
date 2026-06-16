@@ -92,14 +92,28 @@ class GuardedRiskEngine:
         minimum_trade_quantity = max(rules.minimum_quantity, minimum_by_notional)
         return min(max(configured_quantity, minimum_trade_quantity), rules.maximum_quantity)
 
-    def stop_price(self, entry_price: Decimal, side_sign: int, tick: Decimal) -> Decimal:
+    def stop_price(
+        self,
+        entry_price: Decimal,
+        side_sign: int,
+        tick: Decimal,
+        stop_pct: Decimal | None = None,
+    ) -> Decimal:
+        pct = stop_pct if stop_pct is not None else Decimal(str(self.settings.stop_pct))
         raw = entry_price * (
-            Decimal(1) - Decimal(side_sign) * Decimal(str(self.settings.stop_pct))
+            Decimal(1) - Decimal(side_sign) * pct
         )
         return floor_to_step(raw, tick)
 
-    def target_price(self, entry_price: Decimal, side_sign: int, tick: Decimal) -> Decimal:
+    def target_price(
+        self,
+        entry_price: Decimal,
+        side_sign: int,
+        tick: Decimal,
+        target_pct: Decimal | None = None,
+    ) -> Decimal:
+        pct = target_pct if target_pct is not None else Decimal(str(self.settings.target_pct))
         raw = entry_price * (
-            Decimal(1) + Decimal(side_sign) * Decimal(str(self.settings.target_pct))
+            Decimal(1) + Decimal(side_sign) * pct
         )
         return floor_to_step(raw, tick)

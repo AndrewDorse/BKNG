@@ -25,7 +25,7 @@ sys.modules.setdefault(
     types.SimpleNamespace(Counter=Metric, Gauge=Metric, Histogram=Metric),
 )
 
-from kronos_futures.bot.engine import contiguous
+from kronos_futures.bot.engine import contiguous, interval_seconds
 
 
 def candle(open_time: datetime, *, closed: bool = True) -> Candle:
@@ -57,3 +57,10 @@ def test_contiguous_rejects_missing_minute():
     )
 
     assert contiguous(candles, 60) is False
+
+
+def test_interval_seconds_supports_strategy_timeframes():
+    assert interval_seconds("15m") == 15 * 60
+    assert interval_seconds("1h") == 60 * 60
+    assert interval_seconds("4h") == 4 * 60 * 60
+    assert interval_seconds("1d") == 24 * 60 * 60

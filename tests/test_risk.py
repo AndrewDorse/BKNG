@@ -98,3 +98,17 @@ def test_entry_quantity_uses_half_available_balance():
     assert quantity == Decimal("0.003")
     assert required_margin == Decimal("3.840")
     assert required_margin <= account.available_balance * Decimal("0.50")
+
+
+def test_entry_quantity_uses_five_percent_margin_at_ten_x_and_minimum_notional():
+    account, market, rules = contexts("1000", "50000")
+    risk = GuardedRiskEngine(RiskSettings(leverage=10, margin_fraction=0.05))
+
+    assert risk.entry_quantity(account, market, rules) == Decimal("0.010")
+
+
+def test_stop_and_target_accept_signal_overrides():
+    risk = GuardedRiskEngine(RiskSettings(stop_pct=0.01, target_pct=0.01))
+
+    assert risk.stop_price(Decimal("100"), 1, Decimal("0.01"), Decimal("0.03")) == Decimal("97.00")
+    assert risk.target_price(Decimal("100"), 1, Decimal("0.01"), Decimal("0.0075")) == Decimal("100.75")
