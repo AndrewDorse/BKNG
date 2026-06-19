@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from prometheus_client import Counter, Gauge, Histogram
 import httpx
 
+from .binance import BinanceError
 from .domain import ForecastContext, MarketContext, OrderRequest, PositionContext, Side
 from .risk import GuardedRiskEngine
 from .settings import BindingSettings
@@ -289,7 +290,7 @@ class TradingEngine:
 
     async def enter(self, intent, market, account) -> None:
         assert intent.side and self.rules
-        quantity = self.risk.entry_quantity(account, market, self.rules)
+        quantity = self.risk.entry_quantity(account, market, self.rules, intent.stop_pct)
         request = OrderRequest(
             symbol=self.binding.symbol,
             side=intent.side.entry_order_side,
@@ -299,7 +300,20 @@ class TradingEngine:
                 self.binding.name, intent.candle_close_time, "entry"
             ),
         )
-        result = await self.exchange.submit_order(request)
+        try:
+            result = await self.exchange.submit_order(request)
+        except BinanceError as exc:
+            if exc.code == -4411:
+                self.halted_reason = "tradfi_perps_agreement_required"
+                LOG.error(
+                    "binding_halted",
+                    extra={
+                        "symbol": self.binding.symbol,
+                        "reason": self.halted_reason,
+                    },
+                )
+                return
+            raise
         ORDERS.labels(self.binding.name, "entry", result.status).inc()
         if result.status not in {"FILLED", "PARTIALLY_FILLED"}:
             return

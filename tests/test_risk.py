@@ -112,3 +112,21 @@ def test_stop_and_target_accept_signal_overrides():
 
     assert risk.stop_price(Decimal("100"), 1, Decimal("0.01"), Decimal("0.03")) == Decimal("97.00")
     assert risk.target_price(Decimal("100"), 1, Decimal("0.01"), Decimal("0.0075")) == Decimal("100.75")
+
+
+def test_stop_risk_sizing_reduces_notional_for_wide_stop():
+    account, market, rules = contexts("1000", "50000")
+    risk = GuardedRiskEngine(
+        RiskSettings(
+            leverage=10,
+            margin_fraction=0.05,
+            risk_fraction=0.01,
+        )
+    )
+
+    quantity = risk.entry_quantity(account, market, rules, Decimal("0.10"))
+    notional = quantity * market.ask
+
+    assert quantity == Decimal("0.002")
+    assert notional == Decimal("100.000")
+    assert notional * Decimal("0.10") == account.equity * Decimal("0.01")

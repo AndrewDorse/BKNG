@@ -53,7 +53,9 @@ class BinanceGateway:
             timeout=httpx.Timeout(timeout_seconds, read=max(timeout_seconds, 10.0))
         )
         self.time_offset_ms = 0
+        self._time_sync_lock = asyncio.Lock()
         self._rules: dict[str, SymbolRules] = {}
+        self._exchange_info: dict[str, Any] | None = None
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -67,59 +69,83 @@ class BinanceGateway:
         signed: bool = False,
         retries: int = 3,
     ) -> Any:
-        values = {key: str(value) for key, value in (params or {}).items() if value is not None}
+        base_values = {
+            key: str(value) for key, value in (params or {}).items() if value is not None
+        }
         headers = {"X-MBX-APIKEY": self.api_key} if self.api_key else {}
-        if signed:
-            values["timestamp"] = str(int(time.time() * 1000) + self.time_offset_ms)
-            values["recvWindow"] = "5000"
-            query = urlencode(values)
-            values["signature"] = hmac.new(
-                self.api_secret, query.encode(), hashlib.sha256
-            ).hexdigest()
         last_transport_error: httpx.HTTPError | None = None
-        for attempt in range(retries):
+        response: httpx.Response | None = None
+        body: dict[str, Any] = {}
+        attempt = 0
+        clock_retry_used = False
+        while attempt < max(1, retries):
+            values = dict(base_values)
+            if signed:
+                values["timestamp"] = str(int(time.time() * 1000) + self.time_offset_ms)
+                values["recvWindow"] = "10000"
+                values["signature"] = hmac.new(
+                    self.api_secret,
+                    urlencode(values).encode(),
+                    hashlib.sha256,
+                ).hexdigest()
             try:
                 response = await self.client.request(
                     method, self.rest_base + path, params=values, headers=headers
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_transport_error = exc
-                if method.upper() != "GET" or attempt == retries - 1:
+                attempt += 1
+                if method.upper() != "GET" or attempt >= max(1, retries):
                     raise
-                await asyncio.sleep(min(2**attempt, 4))
+                await asyncio.sleep(min(2 ** (attempt - 1), 4))
                 continue
             if response.status_code < 400:
                 return response.json()
             body = response.json()
             code = body.get("code")
-            if code == -1021 and attempt == 0:
+            if signed and code == -1021 and not clock_retry_used:
+                clock_retry_used = True
                 await self.synchronize_time()
-                values["timestamp"] = str(int(time.time() * 1000) + self.time_offset_ms)
-                unsigned = {key: value for key, value in values.items() if key != "signature"}
-                values["signature"] = hmac.new(
-                    self.api_secret, urlencode(unsigned).encode(), hashlib.sha256
-                ).hexdigest()
+                # Timestamp rejection means Binance did not accept the request, so
+                # retrying a POST once with a fresh signature cannot duplicate an order.
+                if attempt >= max(1, retries) - 1:
+                    retries = attempt + 2
                 continue
             if response.status_code in {418, 429} or response.status_code >= 500:
+                attempt += 1
                 await asyncio.sleep(min(2**attempt, 8))
                 continue
             raise BinanceError(response.status_code, code, body.get("msg", response.text))
         if last_transport_error is not None:
             raise last_transport_error
+        if response is None:
+            raise RuntimeError("Binance request ended without a response")
         raise BinanceError(response.status_code, body.get("code"), body.get("msg", response.text))
 
     async def synchronize_time(self) -> None:
-        started = int(time.time() * 1000)
-        payload = await self._request("GET", "/fapi/v1/time")
-        completed = int(time.time() * 1000)
-        midpoint = (started + completed) // 2
-        self.time_offset_ms = int(payload["serverTime"]) - midpoint
+        lock = getattr(self, "_time_sync_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._time_sync_lock = lock
+        async with lock:
+            started = int(time.time() * 1000)
+            payload = await self._request("GET", "/fapi/v1/time")
+            completed = int(time.time() * 1000)
+            midpoint = (started + completed) // 2
+            self.time_offset_ms = int(payload["serverTime"]) - midpoint
 
     async def symbol_rules(self, symbol: str) -> SymbolRules:
         if symbol in self._rules:
             return self._rules[symbol]
-        payload = await self._request("GET", "/fapi/v1/exchangeInfo")
-        match = next(item for item in payload["symbols"] if item["symbol"] == symbol)
+        if getattr(self, "_exchange_info", None) is None:
+            payload = await self._request("GET", "/fapi/v1/exchangeInfo")
+            self._exchange_info = {item["symbol"]: item for item in payload["symbols"]}
+        try:
+            match = self._exchange_info[symbol]
+        except KeyError as exc:
+            raise RuntimeError(f"Binance symbol is unavailable: {symbol}") from exc
+        if match.get("status") != "TRADING" or match.get("contractType") != "PERPETUAL":
+            raise RuntimeError(f"Binance symbol is not an active perpetual: {symbol}")
         filters = {item["filterType"]: item for item in match["filters"]}
         lot = filters["LOT_SIZE"]
         price = filters["PRICE_FILTER"]

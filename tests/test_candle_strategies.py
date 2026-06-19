@@ -9,7 +9,7 @@ from kronos_futures.bot.domain import (
     PositionContext,
     Side,
 )
-from kronos_futures.bot.strategies import CompositeCandleStrategy
+from kronos_futures.bot.strategies import CompositeCandleStrategy, _rsi
 
 
 def make_candles(
@@ -138,8 +138,8 @@ def test_pullback_trend_rule_fires():
             }
         ]
     )
-    closes = [Decimal(100 + index) for index in range(191)]
-    closes += [Decimal("300"), Decimal("298"), Decimal("296"), Decimal("294"), Decimal("292"), Decimal("290"), Decimal("288"), Decimal("286"), Decimal("284"), Decimal("282"), Decimal("280"), Decimal("278"), Decimal("276"), Decimal("274")]
+    closes = [Decimal(100 + index) for index in range(185)]
+    closes += [Decimal(305 - 2 * index) for index in range(20)]
     candles = make_candles(closes, interval_minutes=15)
 
     assert evaluate(strategy, candles, "15m").side is Side.LONG
@@ -160,7 +160,10 @@ def test_rsi2_short_rule_fires_below_ema200():
             }
         ]
     )
-    closes = [Decimal("200")] * 202 + [Decimal("90"), Decimal("95"), Decimal("100")]
+    closes = [Decimal("200")] * 199 + [
+        Decimal("90"), Decimal("110"), Decimal("130"),
+        Decimal("150"), Decimal("170"), Decimal("190"),
+    ]
     candles = make_candles(closes, interval_minutes=24 * 60)
 
     assert evaluate(strategy, candles, "1d").side is Side.SHORT
@@ -236,3 +239,10 @@ def test_priority_uses_first_matching_rule():
     candles = make_candles(closes, last_open=Decimal("100"), last_high=Decimal("103"), last_low=Decimal("99"))
 
     assert evaluate(strategy, candles).reason == "first"
+
+
+def test_rsi_uses_wilder_smoothing_across_history():
+    assert _rsi(
+        [Decimal("100"), Decimal("101"), Decimal("100"), Decimal("101")],
+        2,
+    ) == Decimal("75")

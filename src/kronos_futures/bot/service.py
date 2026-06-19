@@ -18,6 +18,7 @@ from .domain import TradingMode
 from .engine import TradingEngine
 from .inference import HttpInferenceClient
 from .paper import PaperGateway
+from .portfolio import PortfolioTradingEngine
 from .risk import GuardedRiskEngine
 from .settings import load_settings, load_strategy
 
@@ -40,6 +41,7 @@ class JsonFormatter(logging.Formatter):
             "reason",
             "leverage",
             "margin_fraction",
+            "symbols",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
@@ -72,12 +74,14 @@ class BotService:
         self.exchange = (
             PaperGateway(
                 self.market,
-                Decimal(os.getenv("PAPER_STARTING_EQUITY", "20")),
+                Decimal(os.getenv("PAPER_STARTING_EQUITY", "100")),
+                state_path=str(Path(self.settings.state_path).with_name("paper_exchange.json")),
             )
             if self.settings.mode is TradingMode.PAPER
             else self.market
         )
         self.engines: list[TradingEngine] = []
+        self.portfolio_engines: list[PortfolioTradingEngine] = []
         self.live = True
 
     async def start(self) -> None:
@@ -101,19 +105,34 @@ class BotService:
                 poll_seconds=self.settings.poll_seconds,
             )
             self.engines.append(engine)
-        await asyncio.gather(*(engine.run() for engine in self.engines))
+        for portfolio in self.settings.portfolios:
+            if portfolio.enabled:
+                self.portfolio_engines.append(
+                    PortfolioTradingEngine(
+                        portfolio,
+                        self.exchange,
+                        self.settings.state_path,
+                        poll_seconds=self.settings.poll_seconds,
+                    )
+                )
+        await asyncio.gather(
+            *(engine.run() for engine in [*self.engines, *self.portfolio_engines])
+        )
 
     async def stop(self) -> None:
         logging.getLogger(__name__).info("trader_stop")
         self.live = False
         for engine in self.engines:
             engine.running = False
+        for engine in self.portfolio_engines:
+            engine.running = False
         await self.inference.close()
         await self.market.close()
 
     @property
     def ready(self) -> bool:
-        return bool(self.engines) and all(engine.ready for engine in self.engines)
+        engines = [*self.engines, *self.portfolio_engines]
+        return bool(engines) and all(engine.ready for engine in engines)
 
 
 def health_app(service: BotService) -> FastAPI:
@@ -152,6 +171,28 @@ def health_app(service: BotService) -> FastAPI:
                     "halted_reason": engine.halted_reason,
                 }
                 for engine in service.engines
+            ],
+            "portfolios": [
+                {
+                    "name": engine.settings.name,
+                    "symbols": list(engine.settings.symbols),
+                    "last_analyzed_candle": (
+                        engine.last_analyzed_candle.isoformat()
+                        if engine.last_analyzed_candle
+                        else None
+                    ),
+                    "last_analysis_error": engine.last_analysis_error,
+                    "positions": sorted((engine.state.positions or {}).keys()),
+                    "halted_reason": engine.state.halted_reason,
+                    "safety_counters": {
+                        "started_at": engine.state.started_at,
+                        "closed_trades": engine.state.closed_trades,
+                        "max_drawdown_pct": engine.state.max_drawdown_pct,
+                        "unprotected_positions": engine.state.unprotected_positions,
+                        "reconciliation_errors": engine.state.reconciliation_errors,
+                    },
+                }
+                for engine in service.portfolio_engines
             ],
         }
 

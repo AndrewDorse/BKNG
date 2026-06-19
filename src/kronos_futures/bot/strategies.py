@@ -141,16 +141,23 @@ def _ema(values: list[Decimal], span: int) -> Decimal:
 def _rsi(values: list[Decimal], period: int) -> Decimal | None:
     if len(values) <= period:
         return None
-    gains: list[Decimal] = []
-    losses: list[Decimal] = []
-    for left, right in zip(values[-period - 1 :], values[-period:]):
+    alpha = Decimal(1) / Decimal(period)
+    average_gain = Decimal(0)
+    average_loss = Decimal(0)
+    initialized = False
+    for left, right in zip(values, values[1:]):
         delta = right - left
-        gains.append(max(delta, Decimal(0)))
-        losses.append(max(-delta, Decimal(0)))
-    average_gain = sum(gains, Decimal(0)) / Decimal(period)
-    average_loss = sum(losses, Decimal(0)) / Decimal(period)
+        gain = max(delta, Decimal(0))
+        loss = max(-delta, Decimal(0))
+        if not initialized:
+            average_gain = gain
+            average_loss = loss
+            initialized = True
+        else:
+            average_gain = gain * alpha + average_gain * (Decimal(1) - alpha)
+            average_loss = loss * alpha + average_loss * (Decimal(1) - alpha)
     if average_loss == 0:
-        return Decimal(100)
+        return Decimal(100) if average_gain > 0 else Decimal(50)
     relative_strength = average_gain / average_loss
     return Decimal(100) - Decimal(100) / (Decimal(1) + relative_strength)
 

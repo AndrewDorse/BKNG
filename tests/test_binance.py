@@ -1,4 +1,5 @@
 import asyncio
+import time
 from decimal import Decimal
 
 import httpx
@@ -193,3 +194,43 @@ def test_post_request_does_not_retry_transport_failure():
         raise AssertionError("POST timeout must propagate for client-ID reconciliation")
 
     assert gateway.client.calls == 1
+
+
+def test_signed_post_resynchronizes_and_retries_timestamp_rejection():
+    gateway = object.__new__(BinanceGateway)
+    gateway.api_key = "key"
+    gateway.api_secret = b"secret"
+    gateway.rest_base = "https://example.test"
+    gateway.time_offset_ms = 0
+    gateway._time_sync_lock = asyncio.Lock()
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def request(self, method, url, params=None, headers=None):
+            self.calls += 1
+            if self.calls == 1:
+                return httpx.Response(
+                    400,
+                    json={"code": -1021, "msg": "Timestamp outside recvWindow"},
+                    request=httpx.Request(method, url),
+                )
+            return httpx.Response(
+                200,
+                json={"ok": True},
+                request=httpx.Request(method, url),
+            )
+
+    async def synchronize_time():
+        gateway.time_offset_ms = int(time.time() * 1000)
+
+    gateway.client = Client()
+    gateway.synchronize_time = synchronize_time
+
+    result = asyncio.run(
+        gateway._request("POST", "/fapi/v1/order", signed=True, retries=1)
+    )
+
+    assert result == {"ok": True}
+    assert gateway.client.calls == 2

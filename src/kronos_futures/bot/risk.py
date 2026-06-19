@@ -57,7 +57,7 @@ class GuardedRiskEngine:
             return False, "price_drift_limit"
         if self.settings.leverage > rules.maximum_leverage:
             return False, "leverage_above_symbol_limit"
-        quantity = self.entry_quantity(account, market, rules)
+        quantity = self.entry_quantity(account, market, rules, intent.stop_pct)
         if quantity <= 0 or quantity > rules.maximum_quantity:
             return False, "invalid_order_quantity"
         required_margin = quantity * market.ask / Decimal(self.settings.leverage)
@@ -70,6 +70,7 @@ class GuardedRiskEngine:
         account: AccountContext,
         market: MarketContext,
         rules: SymbolRules,
+        stop_pct: Decimal | None = None,
     ) -> Decimal:
         if self.settings.fixed_margin_usdt is not None:
             margin = Decimal(str(self.settings.fixed_margin_usdt))
@@ -81,6 +82,13 @@ class GuardedRiskEngine:
             )
             margin = account.available_balance * fraction
         notional = margin * Decimal(self.settings.leverage)
+        if (
+            self.settings.risk_fraction is not None
+            and stop_pct is not None
+            and stop_pct > 0
+        ):
+            risk_budget = account.equity * Decimal(str(self.settings.risk_fraction))
+            notional = min(notional, risk_budget / stop_pct)
         price = market.ask
         raw = notional / price if price > 0 else Decimal(0)
         configured_quantity = floor_to_step(raw, rules.quantity_step)

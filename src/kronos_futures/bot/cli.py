@@ -15,7 +15,9 @@ from .settings import load_settings
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Kronos Binance futures bot")
-    result.add_argument("command", choices=["run", "status", "flatten", "reconcile"])
+    result.add_argument(
+        "command", choices=["run", "status", "flatten", "reconcile"]
+    )
     result.add_argument("--config", type=Path, default=Path("config/bot.yaml"))
     result.add_argument("--symbol", default="BTCUSDT")
     return result

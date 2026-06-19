@@ -1,175 +1,38 @@
-mode: paper
-inference_url: http://inference:8081
+mode: live
 poll_seconds: 30
+state_path: /state/portfolio_state.json
 
 health:
   host: 0.0.0.0
   port: 8080
 
-bindings:
-  - name: mstr_high_wr_composite
-    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: MSTRUSDT
-    interval: 1h
+portfolios:
+  - name: cross_momentum_live
+    strategy_id: cross_momentum_v1_utc_1pct
     enabled: true
-    validated: true
-    parameters:
-      name: mstr_high_wr_composite
-      rules:
-        - name: mstr_1h_range_fade_short
-          family: range_fade
-          interval: 1h
-          side: SHORT
-          target_pct: 0.0075
-          stop_pct: 0.03
-          hold_candles: 4
-          parameters:
-            range: 0.02
-            move: 0.006
-        - name: mstr_4h_range_fade_long
-          family: range_fade
-          interval: 4h
-          side: LONG
-          target_pct: 0.015
-          stop_pct: 0.05
-          hold_candles: 3
-          parameters:
-            range: 0.05
-            move: 0.04
-        - name: mstr_4h_rsi2_short
-          family: rsi2_reversion
-          interval: 4h
-          side: SHORT
-          target_pct: 0.015
-          stop_pct: 0.10
-          hold_candles: 6
-          parameters:
-            rsi: 20
-            slow: 200
-    risk: &high_wr_risk
-      profile: high_wr_guarded
-      leverage: 10
-      margin_fraction: 0.05
-      stop_pct: 0.03
-      target_pct: 0.0075
-      max_drawdown_pct: 0.25
-      maximum_signal_age_seconds: 900
-      maximum_price_drift_pct: 0.001
-      maximum_spread_pct: 0.0002
-
-  - name: pltr_high_wr_composite
-    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: PLTRUSDT
-    interval: 1h
-    enabled: true
-    validated: true
-    parameters:
-      name: pltr_high_wr_composite
-      rules:
-        - name: pltr_1h_range_fade_long
-          family: range_fade
-          interval: 1h
-          side: LONG
-          target_pct: 0.0075
-          stop_pct: 0.02
-          hold_candles: 4
-          parameters:
-            range: 0.02
-            move: 0.003
-    risk: *high_wr_risk
-
-  - name: coin_high_wr_composite
-    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: COINUSDT
-    interval: 15m
-    enabled: true
-    validated: true
-    parameters:
-      name: coin_high_wr_composite
-      rules:
-        - name: coin_15m_pullback_trend_long
-          family: pullback_trend
-          interval: 15m
-          side: LONG
-          target_pct: 0.003
-          stop_pct: 0.03
-          hold_candles: 4
-          parameters:
-            fast: 20
-            slow: 100
-            rsi_period: 14
-            rsi: 30
-    risk: *high_wr_risk
-
-  - name: btc_high_wr_composite
-    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: BTCUSDT
-    interval: 1h
-    enabled: true
-    validated: true
-    parameters:
-      name: btc_high_wr_composite
-      rules:
-        - name: btc_1h_range_fade_short
-          family: range_fade
-          interval: 1h
-          side: SHORT
-          target_pct: 0.005
-          stop_pct: 0.02
-          hold_candles: 4
-          parameters:
-            range: 0.02
-            move: 0.003
-        - name: btc_1d_rsi2_short
-          family: rsi2_reversion
-          interval: 1d
-          side: SHORT
-          target_pct: 0.01
-          stop_pct: 0.10
-          hold_candles: 20
-          parameters:
-            rsi: 20
-            slow: 200
-    risk: *high_wr_risk
-
-  - name: sol_high_wr_composite
-    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: SOLUSDT
-    interval: 1h
-    enabled: true
-    validated: true
-    parameters:
-      name: sol_high_wr_composite
-      rules:
-        - name: sol_1h_range_fade_short
-          family: range_fade
-          interval: 1h
-          side: SHORT
-          target_pct: 0.005
-          stop_pct: 0.03
-          hold_candles: 4
-          parameters:
-            range: 0.02
-            move: 0.003
-        - name: sol_4h_bollinger_short
-          family: bollinger_reversion
-          interval: 4h
-          side: SHORT
-          target_pct: 0.015
-          stop_pct: 0.10
-          hold_candles: 12
-          parameters:
-            lookback: 20
-            z: 1.5
-            slow: 200
-        - name: sol_1d_rsi2_short
-          family: rsi2_reversion
-          interval: 1d
-          side: SHORT
-          target_pct: 0.015
-          stop_pct: 0.15
-          hold_candles: 20
-          parameters:
-            rsi: 20
-            slow: 200
-    risk: *high_wr_risk
+    interval: 4h
+    lookback_bars: 24
+    rebalance_bars: 18
+    positions_per_side: 3
+    leverage: 10
+    margin_fraction: 0.01
+    stop_pct: 0.06
+    max_portfolio_drawdown_pct: 0.15
+    maximum_spread_pct: 0.001
+    maximum_price_drift_pct: 0.003
+    symbols:
+      - ESPORTSUSDT
+      - ENAUSDT
+      - XRPUSDT
+      - WLDUSDT
+      - NEARUSDT
+      - XPLUSDT
+      - SOLUSDT
+      - BTCUSDT
+      - DOGEUSDT
+      - BNBUSDT
+      - ZECUSDT
+      - SYNUSDT
+      - ETHUSDT
+      - XLMUSDT
+      - SUIUSDT

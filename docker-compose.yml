@@ -1,42 +1,22 @@
 services:
-  inference:
-    profiles:
-      - kronos
-    build:
-      context: .
-      target: inference
-    restart: unless-stopped
-    environment:
-      TORCH_NUM_THREADS: ${TORCH_NUM_THREADS:-1}
-      KRONOS_SAMPLES: ${KRONOS_SAMPLES:-4}
-      MAX_INFERENCE_P95_MS: ${MAX_INFERENCE_P95_MS:-10000}
-      MIN_AVAILABLE_MEMORY_MB: ${MIN_AVAILABLE_MEMORY_MB:-512}
-      INFERENCE_BENCHMARK_RUNS: ${INFERENCE_BENCHMARK_RUNS:-3}
-      HF_HOME: /models/huggingface
-    volumes:
-      - model_cache:/models
-
   trader:
     build:
       context: .
       target: trader
     restart: unless-stopped
     environment:
-      TRADING_MODE: ${TRADING_MODE:-paper}
-      INFERENCE_URL: http://inference:8081
-      INFERENCE_TIMEOUT_SECONDS: ${INFERENCE_TIMEOUT_SECONDS:-25}
+      TRADING_MODE: ${TRADING_MODE:-live}
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
-      LIVE_RISK_ACKNOWLEDGEMENT: ${LIVE_RISK_ACKNOWLEDGEMENT:-}
-      REQUIRED_LIVE_RISK_ACKNOWLEDGEMENT: ${REQUIRED_LIVE_RISK_ACKNOWLEDGEMENT:-I_ACCEPT_EXTREME_FUTURES_RISK}
-      ALLOW_UNVALIDATED_PAIRS: ${ALLOW_UNVALIDATED_PAIRS:-false}
-      ALLOW_RESEARCH_FULL_MARGIN_LIVE: ${ALLOW_RESEARCH_FULL_MARGIN_LIVE:-false}
-      PAPER_STARTING_EQUITY: ${PAPER_STARTING_EQUITY:-20}
+      LIVE_RISK_ACKNOWLEDGEMENT: ${LIVE_RISK_ACKNOWLEDGEMENT:-I_ACCEPT_EXTREME_FUTURES_RISK}
+      TRADER_STATE_PATH: /state/portfolio_state.json
       POLL_SECONDS: ${POLL_SECONDS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      - trader_state:/state
     stop_grace_period: 30s
 
 volumes:
-  model_cache:
+  trader_state:
