@@ -12,8 +12,6 @@ services:
       TRADER_STATE_PATH: /state/portfolio_state.json
       POLL_SECONDS: ${POLL_SECONDS:-30}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    ports:
-      - "127.0.0.1:8080:8080"
     volumes:
       - trader_state:/state
     stop_grace_period: 30s

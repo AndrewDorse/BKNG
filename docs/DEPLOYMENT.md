@@ -44,11 +44,14 @@ docker compose build --no-cache trader
 docker compose up -d trader
 docker compose ps
 docker compose logs --tail=300 trader
-curl -f http://127.0.0.1:8080/health/ready
+docker compose exec trader curl -f http://127.0.0.1:8080/health/ready
 ```
 
 Do not consider deployment operational until `/health/ready` returns HTTP 200
 and logs contain `portfolio_ready` with no following error.
+
+No host port is published. This avoids collisions with other Hostinger
+projects using port 8080; health remains available inside the container.
 
 ## What Happens At Startup
 
@@ -80,14 +83,13 @@ within five minutes of a scheduled rebalance candle close.
 
 ```bash
 docker compose logs -f trader
-curl -s http://127.0.0.1:8080/health/ready
-curl -s http://127.0.0.1:8080/metrics
+docker compose exec trader curl -s http://127.0.0.1:8080/health/ready
+docker compose exec trader curl -s http://127.0.0.1:8080/metrics
 ```
 
 Readiness reports owned positions, latest candle, halt reason, closed trades,
 worst drawdown, unprotected-position observations, and reconciliation faults.
-The health port is bound to localhost; use an authenticated SSH tunnel rather
-than exposing it publicly.
+The health API is container-internal and is not exposed publicly.
 
 ## Emergency Flatten
 

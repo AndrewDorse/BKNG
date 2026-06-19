@@ -27,13 +27,16 @@ nano .env                 # set BINANCE_API_KEY and BINANCE_API_SECRET
 docker compose build --no-cache trader
 docker compose up -d trader
 docker compose logs -f trader
-curl -f http://127.0.0.1:8080/health/ready
+docker compose exec trader curl -f http://127.0.0.1:8080/health/ready
 ```
 
 The container refuses startup unless credentials and the exact live risk
 acknowledgement are present. Readiness additionally requires active symbols,
 supported leverage, synchronized candles, one-way mode, single-asset margin,
 isolated margin, no unmanaged positions/orders, and restored protective stops.
+
+The health API is intentionally not published on a host port, avoiding
+collisions with other VPS projects. Query it from inside the container.
 
 Do not delete the `trader_state` volume while positions may exist. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for account setup and emergency
