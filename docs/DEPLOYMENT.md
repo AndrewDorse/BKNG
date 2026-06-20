@@ -10,7 +10,7 @@ Before deployment:
 - Select one-way position mode and single-asset USDT margin.
 - Close every existing futures position and cancel every regular/algo order.
 
-The bot configures all 15 symbols for isolated margin and 10x leverage. It
+The bot configures all 15 symbols for isolated margin and 20x leverage. It
 refuses startup if any unmanaged position or order exists.
 
 ## Deploy
@@ -59,19 +59,22 @@ projects using port 8080; health remains available inside the container.
 2. Verify one-way and single-asset account modes.
 3. Refuse all unknown positions and manual/open orders.
 4. Validate every configured perpetual and leverage limit.
-5. Set isolated margin and 10x leverage.
-6. Validate 25 contiguous completed 4h candles for every pair.
+5. Set isolated margin and 20x leverage.
+6. Validate 31 contiguous completed 4h candles for every pair.
 7. Restore a missing stop for every persisted owned position.
-8. Wait for the next fixed UTC 72-hour rebalance boundary.
+8. Wait for the next fixed UTC 72-hour rebalance boundary. The phase is
+   anchored to `00:00 UTC` every third day and does not shift after restarts.
 
 The bot does not enter immediately at container startup unless startup occurs
 within five minutes of a scheduled rebalance candle close.
 
 ## Risk Controls
 
-- Six positions maximum: three long and three short.
-- 1% equity margin each; 6% expected total isolated margin.
-- Minimum Binance order sizing cannot exceed 2% equity for one position.
+- Eight positions maximum: four long and four short.
+- 1.5% equity margin each; 12% baseline total isolated margin.
+- Every order uses at least $2 margin. Quantity rounds upward and increases
+  further when Binance requires a higher minimum quantity or notional.
+- 20x isolated leverage with a 3% adverse stop per position.
 - Every filled entry must receive a native mark-price stop before proceeding.
 - Failed protection or incomplete basket execution flattens the basket and
   persists a halt.

@@ -6,17 +6,18 @@ cross-sectional momentum portfolio. The default deployment mode is `live`.
 ## Strategy
 
 - Completed 4h candles and fixed Unix-UTC rebalance every 72 hours.
-- Rank four-day return over 24 candles.
-- Long the strongest three pairs and short the weakest three.
-- 10x isolated leverage.
-- 1% account equity margin per position; 6% maximum basket margin.
-- Exchange-native reduce-only mark-price stop 6% adverse from entry.
+- Rank five-day return over 30 completed candles.
+- Long the strongest four pairs and short the weakest four.
+- 20x isolated leverage.
+- 1.5% account equity margin per position, with a $2 minimum margin per order.
+- Round quantity upward and raise it when Binance minimum quantity/notional requires it.
+- Exchange-native reduce-only mark-price stop 3% adverse from entry.
 - 15% account drawdown kill switch.
 - Persistent ownership state in the `trader_state` Docker volume.
 
 Historical fixed-phase results are research, not a profit guarantee. The
-available year returned +79.76% at 1% sizing with -11.77% drawdown, but other
-rebalance phases were materially weaker.
+selected fixed phase returned +336.15%, but other rebalance phases were
+materially weaker and the result is not reliable evidence of live performance.
 
 ## Immediate Live Deployment
 

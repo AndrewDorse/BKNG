@@ -23,10 +23,12 @@ def test_config_loads_single_guarded_cross_momentum_portfolio():
     portfolio = settings.portfolios[0]
     assert portfolio.enabled
     assert len(portfolio.symbols) == 15
-    assert portfolio.leverage == 10
-    assert portfolio.margin_fraction == 0.01
-    assert portfolio.positions_per_side == 3
-    assert portfolio.stop_pct == 0.06
+    assert portfolio.lookback_bars == 30
+    assert portfolio.leverage == 20
+    assert portfolio.margin_fraction == 0.015
+    assert portfolio.minimum_margin_usdt == 2.0
+    assert portfolio.positions_per_side == 4
+    assert portfolio.stop_pct == 0.03
     assert portfolio.max_portfolio_drawdown_pct == 0.15
 
 

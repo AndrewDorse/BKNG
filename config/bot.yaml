@@ -11,12 +11,13 @@ portfolios:
     strategy_id: cross_momentum_v1_utc_1pct
     enabled: true
     interval: 4h
-    lookback_bars: 24
+    lookback_bars: 30
     rebalance_bars: 18
-    positions_per_side: 3
-    leverage: 10
-    margin_fraction: 0.01
-    stop_pct: 0.06
+    positions_per_side: 4
+    leverage: 20
+    margin_fraction: 0.015
+    minimum_margin_usdt: 2.0
+    stop_pct: 0.03
     max_portfolio_drawdown_pct: 0.15
     maximum_spread_pct: 0.001
     maximum_price_drift_pct: 0.003

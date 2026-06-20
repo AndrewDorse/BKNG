@@ -43,12 +43,13 @@ class PortfolioSettings:
     name: str
     symbols: tuple[str, ...]
     interval: str = "4h"
-    lookback_bars: int = 24
+    lookback_bars: int = 30
     rebalance_bars: int = 18
-    positions_per_side: int = 3
-    leverage: int = 10
-    margin_fraction: float = 0.01
-    stop_pct: float = 0.06
+    positions_per_side: int = 4
+    leverage: int = 20
+    margin_fraction: float = 0.015
+    minimum_margin_usdt: float = 2.0
+    stop_pct: float = 0.03
     max_portfolio_drawdown_pct: float = 0.15
     maximum_spread_pct: float = 0.001
     maximum_price_drift_pct: float = 0.003
@@ -121,12 +122,13 @@ def load_settings(path: str | Path) -> BotSettings:
             name=item["name"],
             symbols=tuple(symbol.upper() for symbol in item["symbols"]),
             interval=item.get("interval", "4h"),
-            lookback_bars=int(item.get("lookback_bars", 24)),
+            lookback_bars=int(item.get("lookback_bars", 30)),
             rebalance_bars=int(item.get("rebalance_bars", 18)),
-            positions_per_side=int(item.get("positions_per_side", 3)),
-            leverage=int(item.get("leverage", 10)),
-            margin_fraction=float(item.get("margin_fraction", 0.01)),
-            stop_pct=float(item.get("stop_pct", 0.06)),
+            positions_per_side=int(item.get("positions_per_side", 4)),
+            leverage=int(item.get("leverage", 20)),
+            margin_fraction=float(item.get("margin_fraction", 0.015)),
+            minimum_margin_usdt=float(item.get("minimum_margin_usdt", 2.0)),
+            stop_pct=float(item.get("stop_pct", 0.03)),
             max_portfolio_drawdown_pct=float(
                 item.get("max_portfolio_drawdown_pct", 0.15)
             ),
@@ -222,12 +224,14 @@ def validate_settings(settings: BotSettings) -> None:
             raise ValueError("Portfolio must contain 10-25 unique symbols")
         if portfolio.interval != "4h":
             raise ValueError("Cross-sectional portfolio currently requires 4h candles")
-        if not 1 <= portfolio.leverage <= 10:
-            raise ValueError("Portfolio leverage must be between 1x and 10x")
+        if not 1 <= portfolio.leverage <= 20:
+            raise ValueError("Portfolio leverage must be between 1x and 20x")
         if not 0 < portfolio.margin_fraction <= 0.02:
             raise ValueError("Portfolio margin_fraction must be at most 2% per position")
         if portfolio.positions_per_side * 2 * portfolio.margin_fraction > 0.12:
             raise ValueError("Portfolio maximum concurrent margin must be at most 12%")
+        if portfolio.minimum_margin_usdt <= 0:
+            raise ValueError("Portfolio minimum_margin_usdt must be positive")
         if not 0 < portfolio.stop_pct <= 0.06:
             raise ValueError("Portfolio stop_pct must be at most 6%")
         if not 0 < portfolio.max_portfolio_drawdown_pct <= 0.15:

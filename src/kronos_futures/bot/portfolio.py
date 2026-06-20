@@ -318,18 +318,21 @@ class PortfolioTradingEngine:
         ):
             raise RuntimeError(f"Price drift gate failed for {symbol}")
         rules = self.rules[symbol]
-        margin = account.equity * Decimal(str(self.settings.margin_fraction))
+        margin = max(
+            account.equity * Decimal(str(self.settings.margin_fraction)),
+            Decimal(str(self.settings.minimum_margin_usdt)),
+        )
         notional = margin * Decimal(self.settings.leverage)
         entry_price = ask if side is Side.LONG else bid
-        configured = floor_to_step(notional / entry_price, rules.quantity_step)
+        configured = ceil_to_step(notional / entry_price, rules.quantity_step)
         minimum = max(
             rules.minimum_quantity,
             ceil_to_step(rules.minimum_notional / entry_price, rules.quantity_step),
         )
         quantity = max(configured, minimum)
         actual_margin = quantity * entry_price / Decimal(self.settings.leverage)
-        if actual_margin > account.equity * Decimal("0.02"):
-            raise RuntimeError(f"Minimum order exceeds 2% equity for {symbol}")
+        if actual_margin > account.available_balance:
+            raise RuntimeError(f"Insufficient available margin for {symbol}")
         request = OrderRequest(
             symbol=symbol,
             side=side.entry_order_side,

@@ -118,8 +118,36 @@ def test_entry_is_persisted_and_protected(tmp_path):
 
     assert engine.state.positions["S0USDT"]["status"] == "protected"
     assert [request.order_type for request in exchange.submissions] == ["MARKET", "STOP_MARKET"]
-    assert exchange.submissions[0].quantity == Decimal("0.099")
+    assert exchange.submissions[0].quantity == Decimal("0.400")
     assert exchange.submissions[1].close_position is True
+
+
+def test_entry_uses_two_dollar_margin_floor_and_rounds_quantity_up(tmp_path):
+    exchange = Exchange()
+    engine = PortfolioTradingEngine(
+        settings(leverage=20, margin_fraction=0.015, minimum_margin_usdt=2),
+        exchange,
+        str(tmp_path / "state.json"),
+    )
+    engine.rules["S0USDT"] = SymbolRules(
+        "S0USDT",
+        Decimal("0.01"),
+        Decimal("0.001"),
+        Decimal("0.001"),
+        Decimal("50"),
+        Decimal("1000"),
+        20,
+    )
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        engine._enter(
+            "S0USDT", Side.LONG, Decimal("100"), now, now + timedelta(seconds=1), account()
+        )
+    )
+
+    # $2 * 20x targets $40, but Binance's $50 minimum raises this to 0.500 BTC.
+    assert exchange.submissions[0].quantity == Decimal("0.500")
 
 
 def test_reconcile_rejects_unknown_position(tmp_path):
