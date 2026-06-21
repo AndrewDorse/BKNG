@@ -198,6 +198,11 @@ class CompositeCandleStrategy:
         object.__setattr__(self, "rules", tuple(parsed))
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "requires_inference", False)
+        object.__setattr__(
+            self,
+            "_bootstrap_pending",
+            {rule.name for rule in parsed if rule.parameters.get("bootstrap_once")},
+        )
 
     @property
     def required_intervals(self) -> tuple[str, ...]:
@@ -281,4 +286,27 @@ class CompositeCandleStrategy:
             if rule.side is Side.LONG:
                 return z <= -threshold and last.close > ema_slow
             return z >= threshold and last.close < ema_slow
+        if rule.family == "ema_momentum":
+            ema_fast = _ema(closes[-250:], int(params["fast"]))
+            ema_slow = _ema(closes[-250:], int(params["slow"]))
+            if len(closes) < 2:
+                return False
+            if rule.side is Side.LONG:
+                directional_match = ema_fast > ema_slow and closes[-1] > closes[-2]
+            else:
+                directional_match = ema_fast < ema_slow and closes[-1] < closes[-2]
+            if not directional_match:
+                return False
+            cadence_hours = int(params.get("cadence_hours", 0))
+            if rule.name in self._bootstrap_pending:
+                self._bootstrap_pending.remove(rule.name)
+                return True
+            if cadence_hours <= 0:
+                return True
+            interval_hours = INTERVAL_SECONDS[rule.interval] // 3600
+            if interval_hours <= 0 or cadence_hours % interval_hours:
+                raise ValueError(f"Invalid ema_momentum cadence for interval {rule.interval}")
+            slot = int(last.open_time.timestamp() // 3600)
+            cadence_slots = cadence_hours // interval_hours
+            return slot % cadence_slots == 0
         raise ValueError(f"Unsupported candle rule family: {rule.family}")

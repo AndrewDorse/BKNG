@@ -190,6 +190,32 @@ def test_bollinger_short_rule_fires_below_ema200():
     assert evaluate(strategy, candles, "4h").side is Side.SHORT
 
 
+def test_ema_momentum_bootstraps_then_respects_cadence():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "ema_bootstrap",
+                "family": "ema_momentum",
+                "interval": "1h",
+                "side": "LONG",
+                "target_pct": 0.02,
+                "stop_pct": 0.01,
+                "hold_candles": 72,
+                "parameters": {
+                    "fast": 20,
+                    "slow": 60,
+                    "cadence_hours": 72,
+                    "bootstrap_once": True,
+                },
+            }
+        ]
+    )
+    closes = [100 + index for index in range(220)]
+    candles = make_candles(closes, interval_minutes=60)
+    assert evaluate(strategy, candles, "1h").side is Side.LONG
+    assert evaluate(strategy, candles, "1h").side is None
+
+
 def test_rule_does_not_fire_before_enough_history():
     strategy = CompositeCandleStrategy(
         rules=[

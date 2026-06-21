@@ -128,3 +128,61 @@ def test_tradfi_agreement_rejection_halts_only_binding():
     asyncio.run(engine.enter(intent, market, account))
 
     assert engine.halted_reason == "tradfi_perps_agreement_required"
+
+
+def test_reconcile_ignores_external_symbol_activity():
+    now = datetime.now(timezone.utc)
+    binding = BindingSettings(
+        name="coin",
+        strategy="unused",
+        symbol="COINUSDT",
+        interval="1h",
+        risk=RiskSettings(leverage=20, margin_fraction=0.10),
+    )
+
+    class Exchange:
+        async def positions(self):
+            from kronos_futures.bot.domain import PositionSnapshot, OrderResult
+
+            return [
+                PositionSnapshot(
+                    symbol="COINUSDT",
+                    quantity=Decimal("1"),
+                    entry_price=Decimal("100"),
+                    isolated=True,
+                    leverage=5,
+                    opened_at=now,
+                )
+            ]
+
+        async def open_orders(self, symbol):
+            from kronos_futures.bot.domain import OrderResult
+
+            assert symbol == "COINUSDT"
+            return [
+                OrderResult(
+                    symbol="COINUSDT",
+                    client_order_id="manual_1",
+                    order_id=1,
+                    status="NEW",
+                    executed_quantity=Decimal("0"),
+                    average_price=Decimal("0"),
+                    order_type="STOP_MARKET",
+                )
+            ]
+
+    engine = TradingEngine(
+        binding,
+        strategy=None,
+        risk=GuardedRiskEngine(binding.risk),
+        exchange=Exchange(),
+        inference=None,
+    )
+
+    import asyncio
+
+    position = asyncio.run(engine.reconcile())
+
+    assert position.is_open is True
+    assert position.managed is False
+    assert engine.state.managed_position is False

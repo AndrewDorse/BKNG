@@ -221,6 +221,13 @@ class PaperGateway:
                 self._orders[client_id] = replace(order, status="CANCELED")
         self._save_state()
 
+    async def cancel_order(self, symbol: str, client_order_id: str, order_type: str = "") -> None:
+        del order_type
+        order = self._orders.get(client_order_id)
+        if order and order.symbol == symbol and order.status == "NEW":
+            self._orders[client_order_id] = replace(order, status="CANCELED")
+            self._save_state()
+
     async def _trigger_protection(self) -> None:
         for client_id, order in list(self._orders.items()):
             if order.status != "NEW" or order.order_type not in {

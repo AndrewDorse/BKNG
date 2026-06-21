@@ -347,6 +347,22 @@ class BinanceGateway:
             ),
         )
 
+    async def cancel_order(self, symbol: str, client_order_id: str, order_type: str = "") -> None:
+        if order_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}:
+            await self._request(
+                "DELETE",
+                "/fapi/v1/algoOrder",
+                {"symbol": symbol, "clientAlgoId": client_order_id},
+                signed=True,
+            )
+            return
+        await self._request(
+            "DELETE",
+            "/fapi/v1/order",
+            {"symbol": symbol, "origClientOrderId": client_order_id},
+            signed=True,
+        )
+
     async def start_user_stream(self) -> str:
         payload = await self._request("POST", "/fapi/v1/listenKey")
         return payload["listenKey"]

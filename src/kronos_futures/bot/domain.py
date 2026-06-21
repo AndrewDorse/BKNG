@@ -84,6 +84,7 @@ class PositionContext:
     entry_price: Decimal = Decimal(0)
     opened_at: datetime | None = None
     protected: bool = False
+    managed: bool = True
 
     @property
     def is_open(self) -> bool:

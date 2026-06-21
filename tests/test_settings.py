@@ -14,22 +14,28 @@ def live_environment(monkeypatch):
     )
 
 
-def test_config_loads_single_guarded_cross_momentum_portfolio():
+def test_config_loads_ema_momentum_bindings():
     settings = load_settings(Path("config/bot.yaml"))
     enabled = [binding for binding in settings.bindings if binding.enabled]
 
-    assert enabled == []
-    assert len(settings.portfolios) == 1
-    portfolio = settings.portfolios[0]
-    assert portfolio.enabled
-    assert len(portfolio.symbols) == 15
-    assert portfolio.lookback_bars == 30
-    assert portfolio.leverage == 20
-    assert portfolio.margin_fraction == 0.015
-    assert portfolio.minimum_margin_usdt == 2.0
-    assert portfolio.positions_per_side == 4
-    assert portfolio.stop_pct == 0.03
-    assert portfolio.max_portfolio_drawdown_pct == 0.15
+    assert len(enabled) == 10
+    assert settings.portfolios == ()
+    assert {binding.symbol for binding in enabled} == {
+        "BNBUSDT",
+        "SOLUSDT",
+        "ADAUSDT",
+        "TONUSDT",
+        "LTCUSDT",
+        "TSLAUSDT",
+        "AMZNUSDT",
+        "PLTRUSDT",
+        "ORCLUSDT",
+        "METAUSDT",
+    }
+    assert all(binding.interval == "1h" for binding in enabled)
+    assert all(binding.risk.leverage == 20 for binding in enabled)
+    assert all(binding.risk.margin_fraction == 0.10 for binding in enabled)
+    assert all(len(binding.parameters["rules"]) == 2 for binding in enabled)
 
 
 def test_composite_bindings_do_not_require_inference():

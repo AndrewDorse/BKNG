@@ -15,6 +15,7 @@ from .domain import TradingMode
 class RiskSettings:
     leverage: int = 45
     margin_fraction: float = 0.10
+    minimum_margin_usdt: float = 2.0
     risk_fraction: float | None = None
     fixed_margin_usdt: float | None = None
     stop_pct: float = 0.01
@@ -206,6 +207,10 @@ def validate_settings(settings: BotSettings) -> None:
             raise ValueError("margin_fraction must be greater than 0 and at most 1")
         if binding.risk.risk_fraction is not None and not 0 < binding.risk.risk_fraction <= 0.05:
             raise ValueError("risk_fraction must be greater than 0 and at most 0.05")
+        if (
+            binding.risk.minimum_margin_usdt <= 0
+        ):
+            raise ValueError("minimum_margin_usdt must be positive")
         if (
             binding.risk.fixed_margin_usdt is not None
             and binding.risk.fixed_margin_usdt <= 0

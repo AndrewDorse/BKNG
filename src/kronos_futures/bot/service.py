@@ -7,6 +7,7 @@ import os
 import signal
 from decimal import Decimal
 from pathlib import Path
+from datetime import datetime, timezone
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -83,6 +84,33 @@ class BotService:
         self.engines: list[TradingEngine] = []
         self.portfolio_engines: list[PortfolioTradingEngine] = []
         self.live = True
+        self._last_heartbeat_slot: int | None = None
+
+    async def _heartbeat_loop(self) -> None:
+        logger = logging.getLogger(__name__)
+        while self.live:
+            now = datetime.now(timezone.utc)
+            slot = int(now.timestamp() // (4 * 60 * 60))
+            if self._last_heartbeat_slot != slot:
+                self._last_heartbeat_slot = slot
+                open_deals = [
+                    {
+                        "symbol": engine.last_position.symbol,
+                        "side": engine.last_position.side.value,
+                        "managed": engine.last_position.managed,
+                    }
+                    for engine in self.engines
+                    if engine.last_position and engine.last_position.is_open
+                ]
+                logger.info(
+                    "bot_heartbeat",
+                    extra={
+                        "bindings": len(self.engines),
+                        "symbols": len(open_deals),
+                        "reason": str(open_deals),
+                    },
+                )
+            await asyncio.sleep(60)
 
     async def start(self) -> None:
         logging.getLogger(__name__).info(
@@ -103,6 +131,7 @@ class BotService:
                 self.exchange,
                 self.inference,
                 poll_seconds=self.settings.poll_seconds,
+                state_path=str(Path(self.settings.state_path).with_name(f"{binding.name}_state.json")),
             )
             self.engines.append(engine)
         for portfolio in self.settings.portfolios:
@@ -116,7 +145,8 @@ class BotService:
                     )
                 )
         await asyncio.gather(
-            *(engine.run() for engine in [*self.engines, *self.portfolio_engines])
+            *(engine.run() for engine in [*self.engines, *self.portfolio_engines]),
+            self._heartbeat_loop(),
         )
 
     async def stop(self) -> None:

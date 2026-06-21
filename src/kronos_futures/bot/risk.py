@@ -73,14 +73,24 @@ class GuardedRiskEngine:
         stop_pct: Decimal | None = None,
     ) -> Decimal:
         if self.settings.fixed_margin_usdt is not None:
-            margin = Decimal(str(self.settings.fixed_margin_usdt))
+            margin = max(
+                Decimal(str(self.settings.fixed_margin_usdt)),
+                Decimal(str(self.settings.minimum_margin_usdt)),
+            )
         else:
             fraction = (
                 Decimal(1)
                 if self.settings.profile == "research_full_margin"
                 else Decimal(str(self.settings.margin_fraction))
             )
-            margin = account.available_balance * fraction
+            margin = max(
+                account.available_balance * fraction,
+                Decimal(str(self.settings.minimum_margin_usdt)),
+            )
+        if account.available_balance > 0:
+            margin = min(margin, account.available_balance)
+        else:
+            margin = Decimal(0)
         notional = margin * Decimal(self.settings.leverage)
         if (
             self.settings.risk_fraction is not None

@@ -52,6 +52,17 @@ def test_entry_quantity_uses_ten_percent_balance_when_above_minimum():
     assert risk.entry_quantity(account, market, rules) == Decimal("0.010")
 
 
+def test_entry_quantity_uses_two_dollar_margin_floor_for_bindings():
+    account, market, rules = contexts("10", "50000")
+    risk = GuardedRiskEngine(RiskSettings(leverage=50, margin_fraction=0.10, minimum_margin_usdt=2.0))
+
+    quantity = risk.entry_quantity(account, market, rules)
+    required_margin = quantity * market.ask / Decimal(50)
+
+    assert quantity == Decimal("0.002")
+    assert required_margin == Decimal("2.000")
+
+
 def test_entry_quantity_raises_small_order_to_exchange_minimum():
     account, market, rules = contexts("20", "100000")
     risk = GuardedRiskEngine(RiskSettings(leverage=50, margin_fraction=0.10))
