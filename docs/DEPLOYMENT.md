@@ -65,6 +65,11 @@ projects using port 8080; health remains available inside the container.
 8. Wait for the next fixed UTC 72-hour rebalance boundary. The phase is
    anchored to `00:00 UTC` every third day and does not shift after restarts.
 
+If the portfolio is flat and that boundary is more than 48 hours away, startup
+performs one bootstrap rebalance at the next completed 4h candle. The following
+rebalance still occurs at the original fixed boundary, so the bootstrap basket
+can be held for less than 72 hours.
+
 The bot does not enter immediately at container startup unless startup occurs
 within five minutes of a scheduled rebalance candle close.
 

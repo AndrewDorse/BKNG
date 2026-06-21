@@ -13,8 +13,10 @@ from kronos_futures.bot.domain import (
 )
 from kronos_futures.bot.portfolio import (
     PortfolioTradingEngine,
+    next_scheduled_rebalance,
     rank_targets,
     rebalance_due,
+    startup_bootstrap_due,
 )
 from kronos_futures.bot.settings import PortfolioSettings
 
@@ -62,6 +64,17 @@ def test_rebalance_schedule_is_fixed_to_unix_utc():
     assert rebalance_due(epoch, 18)
     assert not rebalance_due(epoch + timedelta(hours=4), 18)
     assert rebalance_due(epoch + timedelta(hours=72), 18)
+
+
+def test_startup_bootstrap_is_used_only_when_fixed_boundary_is_over_48_hours_away():
+    after_missed_boundary = datetime(2026, 6, 21, 0, 10, tzinfo=timezone.utc)
+    close_to_boundary = datetime(2026, 6, 23, 0, 0, tzinfo=timezone.utc)
+
+    assert next_scheduled_rebalance(after_missed_boundary, 18) == datetime(
+        2026, 6, 24, 0, 0, tzinfo=timezone.utc
+    )
+    assert startup_bootstrap_due(after_missed_boundary, 18)
+    assert not startup_bootstrap_due(close_to_boundary, 18)
 
 
 class Exchange:

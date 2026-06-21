@@ -6,6 +6,8 @@ cross-sectional momentum portfolio. The default deployment mode is `live`.
 ## Strategy
 
 - Completed 4h candles and fixed Unix-UTC rebalance every 72 hours.
+- When starting flat more than 48 hours before the next fixed boundary, bootstrap
+  once at the next completed 4h candle, then return to the fixed schedule.
 - Rank five-day return over 30 completed candles.
 - Long the strongest four pairs and short the weakest four.
 - 20x isolated leverage.

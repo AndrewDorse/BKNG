@@ -33,6 +33,23 @@ def rebalance_due(next_open: datetime, rebalance_bars: int) -> bool:
     return int(next_open.timestamp() // FOUR_HOURS) % rebalance_bars == 0
 
 
+def next_scheduled_rebalance(after: datetime, rebalance_bars: int) -> datetime:
+    timestamp = after.astimezone(timezone.utc).timestamp()
+    slot = int(timestamp // FOUR_HOURS)
+    if timestamp % FOUR_HOURS:
+        slot += 1
+    while slot % rebalance_bars:
+        slot += 1
+    return datetime.fromtimestamp(slot * FOUR_HOURS, tz=timezone.utc)
+
+
+def startup_bootstrap_due(
+    started_at: datetime, rebalance_bars: int, threshold_hours: int = 48
+) -> bool:
+    boundary = next_scheduled_rebalance(started_at, rebalance_bars)
+    return boundary - started_at > timedelta(hours=threshold_hours)
+
+
 def rank_targets(
     closes: dict[str, tuple[Decimal, ...]], lookback: int, count: int
 ) -> dict[str, Side]:
@@ -79,6 +96,7 @@ class PortfolioTradingEngine:
         self.ready = False
         self.last_analysis_error: str | None = None
         self.last_analyzed_candle: datetime | None = None
+        self.bootstrap_rebalance_pending = False
         self.rules: dict[str, SymbolRules] = {}
         self.state = self._load_state()
 
@@ -119,7 +137,11 @@ class PortfolioTradingEngine:
             raise RuntimeError("Binance account must use one-way position mode")
         if not await self.exchange.account_is_single_asset():
             raise RuntimeError("Binance account must use single-asset margin mode")
-        await self.reconcile(restore_protection=False)
+        snapshots = await self.reconcile(restore_protection=False)
+        if self.state.halted_reason == "rebalance_incomplete" and not snapshots:
+            self.state.halted_reason = None
+            self._save_state()
+            LOG.info("recovered_empty_incomplete_rebalance")
         for symbol in self.settings.symbols:
             if not await self.exchange.symbol_is_isolated(symbol):
                 raise RuntimeError(f"{symbol} must use isolated margin")
@@ -139,7 +161,14 @@ class PortfolioTradingEngine:
         for symbol, candles in zip(self.settings.symbols, candles_by_symbol):
             if not contiguous(candles, FOUR_HOURS, self.settings.lookback_bars + 1):
                 raise RuntimeError(f"{symbol} 4h candle history is not contiguous")
-        await self.reconcile(restore_protection=True)
+        snapshots = await self.reconcile(restore_protection=True)
+        self.bootstrap_rebalance_pending = (
+            not snapshots
+            and not self.state.halted_reason
+            and startup_bootstrap_due(
+                datetime.now(timezone.utc), self.settings.rebalance_bars
+            )
+        )
         account = await self.exchange.account()
         peak = max(Decimal(self.state.peak_equity), account.equity)
         self.state.peak_equity = str(peak)
@@ -153,6 +182,7 @@ class PortfolioTradingEngine:
                 "symbols": len(self.settings.symbols),
                 "leverage": self.settings.leverage,
                 "margin_fraction": self.settings.margin_fraction,
+                "bootstrap_rebalance_pending": self.bootstrap_rebalance_pending,
             },
         )
 
@@ -209,7 +239,9 @@ class PortfolioTradingEngine:
         latest_open = latest_times.pop()
         self.last_analyzed_candle = latest_open
         next_open = latest_open + timedelta(hours=4)
-        if not rebalance_due(next_open, self.settings.rebalance_bars):
+        scheduled_rebalance = rebalance_due(next_open, self.settings.rebalance_bars)
+        bootstrap_rebalance = self.bootstrap_rebalance_pending and not self.state.positions
+        if not scheduled_rebalance and not bootstrap_rebalance:
             return
         if self.state.last_rebalance_open == next_open.isoformat():
             return
@@ -225,7 +257,8 @@ class PortfolioTradingEngine:
             self.settings.lookback_bars,
             self.settings.positions_per_side,
         )
-        await self.flatten_all("scheduled_rebalance")
+        reason = "scheduled_rebalance" if scheduled_rebalance else "startup_bootstrap"
+        await self.flatten_all(reason)
         account = await self.exchange.account()
         opened: list[str] = []
         try:
@@ -240,6 +273,7 @@ class PortfolioTradingEngine:
             self._save_state()
             raise
         self.state.last_rebalance_open = next_open.isoformat()
+        self.bootstrap_rebalance_pending = False
         self._save_state()
 
     async def reconcile(self, restore_protection: bool) -> dict[str, PositionSnapshot]:
