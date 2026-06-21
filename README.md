@@ -11,6 +11,10 @@ cross-sectional momentum portfolio. The default deployment mode is `live`.
 - Rank five-day return over 30 completed candles.
 - Long the strongest four pairs and short the weakest four.
 - 20x isolated leverage.
+- Automatically use 10x for a symbol when Binance does not allow 20x; reject
+  the symbol only when even 10x is unavailable.
+- Skip unavailable, delisted, invalid-history, and temporarily failing symbols;
+  replace failed entries with the next pair in the momentum ranking.
 - 1.5% account equity margin per position, with a $2 minimum margin per order.
 - Round quantity upward and raise it when Binance minimum quantity/notional requires it.
 - Exchange-native reduce-only mark-price stop 3% adverse from entry.

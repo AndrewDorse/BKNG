@@ -50,6 +50,14 @@ def startup_bootstrap_due(
     return boundary - started_at > timedelta(hours=threshold_hours)
 
 
+def effective_leverage(configured: int, maximum: int, fallback: int = 10) -> int:
+    if maximum >= configured:
+        return configured
+    if maximum >= fallback:
+        return fallback
+    raise RuntimeError(f"Symbol maximum leverage {maximum}x is below fallback {fallback}x")
+
+
 def rank_targets(
     closes: dict[str, tuple[Decimal, ...]], lookback: int, count: int
 ) -> dict[str, Side]:
@@ -64,6 +72,18 @@ def rank_targets(
     result = {symbol: Side.SHORT for symbol in ordered[:count]}
     result.update({symbol: Side.LONG for symbol in ordered[-count:]})
     return result
+
+
+def rank_candidates(
+    closes: dict[str, tuple[Decimal, ...]], lookback: int
+) -> tuple[list[str], list[str]]:
+    momentum = {
+        symbol: values[-1] / values[-1 - lookback] - Decimal(1)
+        for symbol, values in closes.items()
+        if len(values) > lookback and values[-1 - lookback] > 0
+    }
+    ordered = sorted(momentum, key=lambda symbol: (momentum[symbol], symbol))
+    return ordered, list(reversed(ordered))
 
 
 @dataclass
@@ -98,6 +118,8 @@ class PortfolioTradingEngine:
         self.last_analyzed_candle: datetime | None = None
         self.bootstrap_rebalance_pending = False
         self.rules: dict[str, SymbolRules] = {}
+        self.leverages: dict[str, int] = {}
+        self.eligible_symbols: list[str] = []
         self.state = self._load_state()
 
     def _load_state(self) -> PortfolioState:
@@ -143,24 +165,54 @@ class PortfolioTradingEngine:
             self._save_state()
             LOG.info("recovered_empty_incomplete_rebalance")
         for symbol in self.settings.symbols:
-            if not await self.exchange.symbol_is_isolated(symbol):
-                raise RuntimeError(f"{symbol} must use isolated margin")
-            rules = await self.exchange.symbol_rules(symbol)
-            if self.settings.leverage > rules.maximum_leverage:
-                raise RuntimeError(f"{symbol} does not support configured leverage")
+            try:
+                if not await self.exchange.symbol_is_isolated(symbol):
+                    raise RuntimeError("isolated margin unavailable")
+                rules = await self.exchange.symbol_rules(symbol)
+                leverage = effective_leverage(
+                    self.settings.leverage, rules.maximum_leverage
+                )
+                await self.exchange.set_leverage(symbol, leverage)
+            except Exception as exc:
+                LOG.error(
+                    "portfolio_symbol_skipped",
+                    extra={"symbol": symbol, "reason": str(exc)},
+                )
+                continue
             self.rules[symbol] = rules
-            await self.exchange.set_leverage(symbol, self.settings.leverage)
+            self.leverages[symbol] = leverage
+            self.eligible_symbols.append(symbol)
+            if leverage != self.settings.leverage:
+                LOG.info(
+                    "symbol_leverage_fallback",
+                    extra={
+                        "symbol": symbol,
+                        "configured_leverage": self.settings.leverage,
+                        "effective_leverage": leverage,
+                        "maximum_leverage": rules.maximum_leverage,
+                    },
+                )
         candles_by_symbol = await asyncio.gather(
             *(
                 self.exchange.klines(
                     symbol, self.settings.interval, self.settings.lookback_bars + 2
                 )
-                for symbol in self.settings.symbols
-            )
+                for symbol in self.eligible_symbols
+            ),
+            return_exceptions=True,
         )
-        for symbol, candles in zip(self.settings.symbols, candles_by_symbol):
-            if not contiguous(candles, FOUR_HOURS, self.settings.lookback_bars + 1):
-                raise RuntimeError(f"{symbol} 4h candle history is not contiguous")
+        validated = []
+        for symbol, candles in zip(self.eligible_symbols, candles_by_symbol):
+            if isinstance(candles, Exception) or not contiguous(
+                candles, FOUR_HOURS, self.settings.lookback_bars + 1
+            ):
+                LOG.error(
+                    "portfolio_symbol_skipped",
+                    extra={"symbol": symbol, "reason": "invalid 4h history"},
+                )
+                continue
+            validated.append(symbol)
+        self.eligible_symbols = validated
         snapshots = await self.reconcile(restore_protection=True)
         self.bootstrap_rebalance_pending = (
             not snapshots
@@ -179,7 +231,7 @@ class PortfolioTradingEngine:
         LOG.info(
             "portfolio_ready",
             extra={
-                "symbols": len(self.settings.symbols),
+                "symbols": len(self.eligible_symbols),
                 "leverage": self.settings.leverage,
                 "margin_fraction": self.settings.margin_fraction,
                 "bootstrap_rebalance_pending": self.bootstrap_rebalance_pending,
@@ -223,20 +275,38 @@ class PortfolioTradingEngine:
         batches = await asyncio.gather(
             *(
                 self.exchange.klines(symbol, self.settings.interval, required + 1)
-                for symbol in self.settings.symbols
-            )
+                for symbol in self.eligible_symbols
+            ),
+            return_exceptions=True,
         )
         synchronized: dict[str, tuple] = {}
-        latest_times = set()
-        for symbol, batch in zip(self.settings.symbols, batches):
+        by_latest: dict[datetime, dict[str, tuple]] = {}
+        for symbol, batch in zip(self.eligible_symbols, batches):
+            if isinstance(batch, Exception):
+                LOG.error(
+                    "portfolio_symbol_cycle_skipped",
+                    extra={"symbol": symbol, "reason": type(batch).__name__},
+                )
+                continue
             candles = tuple(batch[-required:])
             if not contiguous(candles, FOUR_HOURS, required):
-                raise RuntimeError(f"Non-contiguous 4h candles for {symbol}")
-            synchronized[symbol] = candles
-            latest_times.add(candles[-1].open_time)
-        if len(latest_times) != 1:
-            raise RuntimeError("Portfolio candles are not synchronized")
-        latest_open = latest_times.pop()
+                LOG.error(
+                    "portfolio_symbol_cycle_skipped",
+                    extra={"symbol": symbol, "reason": "non-contiguous candles"},
+                )
+                continue
+            by_latest.setdefault(candles[-1].open_time, {})[symbol] = candles
+        if not by_latest:
+            return
+        latest_open, synchronized = max(
+            by_latest.items(), key=lambda item: (len(item[1]), item[0])
+        )
+        if len(synchronized) < self.settings.positions_per_side * 2:
+            LOG.error(
+                "portfolio_insufficient_eligible_symbols",
+                extra={"eligible": len(synchronized)},
+            )
+            return
         self.last_analyzed_candle = latest_open
         next_open = latest_open + timedelta(hours=4)
         scheduled_rebalance = rebalance_due(next_open, self.settings.rebalance_bars)
@@ -249,29 +319,43 @@ class PortfolioTradingEngine:
         if datetime.now(timezone.utc) - latest_close > timedelta(minutes=5):
             raise RuntimeError("Refusing stale portfolio rebalance")
 
-        targets = rank_targets(
-            {
-                symbol: tuple(candle.close for candle in candles)
-                for symbol, candles in synchronized.items()
-            },
+        short_candidates, long_candidates = rank_candidates(
+            {symbol: tuple(candle.close for candle in candles) for symbol, candles in synchronized.items()},
             self.settings.lookback_bars,
-            self.settings.positions_per_side,
         )
         reason = "scheduled_rebalance" if scheduled_rebalance else "startup_bootstrap"
         await self.flatten_all(reason)
         account = await self.exchange.account()
-        opened: list[str] = []
-        try:
-            for symbol, side in targets.items():
+        opened: set[str] = set()
+        for side, candidates in (
+            (Side.SHORT, short_candidates),
+            (Side.LONG, long_candidates),
+        ):
+            side_opened = 0
+            for symbol in candidates:
+                if symbol in opened:
+                    continue
                 latest = synchronized[symbol][-1]
-                await self._enter(symbol, side, latest.close, latest.close_time, next_open, account)
-                opened.append(symbol)
-        except Exception:
-            LOG.exception("portfolio_rebalance_incomplete")
-            await self.flatten_all("rebalance_incomplete")
-            self.state.halted_reason = "rebalance_incomplete"
-            self._save_state()
-            raise
+                try:
+                    await self._enter(
+                        symbol, side, latest.close, latest.close_time, next_open, account
+                    )
+                except Exception:
+                    LOG.exception(
+                        "portfolio_symbol_entry_skipped",
+                        extra={"symbol": symbol, "side": side.value},
+                    )
+                    await self._flatten_symbol(symbol, "entry_failed")
+                    continue
+                opened.add(symbol)
+                side_opened += 1
+                if side_opened == self.settings.positions_per_side:
+                    break
+            if side_opened < self.settings.positions_per_side:
+                LOG.error(
+                    "portfolio_side_incomplete",
+                    extra={"side": side.value, "opened": side_opened},
+                )
         self.state.last_rebalance_open = next_open.isoformat()
         self.bootstrap_rebalance_pending = False
         self._save_state()
@@ -352,11 +436,12 @@ class PortfolioTradingEngine:
         ):
             raise RuntimeError(f"Price drift gate failed for {symbol}")
         rules = self.rules[symbol]
+        leverage = self.leverages.get(symbol, self.settings.leverage)
         margin = max(
             account.equity * Decimal(str(self.settings.margin_fraction)),
             Decimal(str(self.settings.minimum_margin_usdt)),
         )
-        notional = margin * Decimal(self.settings.leverage)
+        notional = margin * Decimal(leverage)
         entry_price = ask if side is Side.LONG else bid
         configured = ceil_to_step(notional / entry_price, rules.quantity_step)
         minimum = max(
@@ -364,7 +449,7 @@ class PortfolioTradingEngine:
             ceil_to_step(rules.minimum_notional / entry_price, rules.quantity_step),
         )
         quantity = max(configured, minimum)
-        actual_margin = quantity * entry_price / Decimal(self.settings.leverage)
+        actual_margin = quantity * entry_price / Decimal(leverage)
         if actual_margin > account.available_balance:
             raise RuntimeError(f"Insufficient available margin for {symbol}")
         request = OrderRequest(
@@ -396,7 +481,7 @@ class PortfolioTradingEngine:
             quantity=result.executed_quantity * side.sign,
             entry_price=result.average_price,
             isolated=True,
-            leverage=self.settings.leverage,
+            leverage=leverage,
             opened_at=datetime.now(timezone.utc),
         )
         self.state.positions[symbol] = {
@@ -456,7 +541,15 @@ class PortfolioTradingEngine:
             for item in await self.exchange.positions()
             if item.symbol in self.settings.symbols
         }
-        for symbol, snapshot in snapshots.items():
+        for symbol in snapshots:
+            await self._flatten_symbol(symbol, reason)
+        self.state.positions = {}
+        self._save_state()
+
+    async def _flatten_symbol(self, symbol: str, reason: str) -> None:
+        snapshots = {item.symbol: item for item in await self.exchange.positions()}
+        snapshot = snapshots.get(symbol)
+        if snapshot is not None:
             await self.exchange.cancel_all_orders(symbol)
             side = Side.LONG if snapshot.quantity > 0 else Side.SHORT
             result = None
@@ -505,5 +598,6 @@ class PortfolioTradingEngine:
                     "reason": reason,
                 },
             )
-        self.state.positions = {}
+        if self.state.positions is not None:
+            self.state.positions.pop(symbol, None)
         self._save_state()

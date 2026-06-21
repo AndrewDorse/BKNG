@@ -10,8 +10,11 @@ Before deployment:
 - Select one-way position mode and single-asset USDT margin.
 - Close every existing futures position and cancel every regular/algo order.
 
-The bot configures all 15 symbols for isolated margin and 20x leverage. It
-refuses startup if any unmanaged position or order exists.
+The bot configures eligible symbols for isolated margin and 20x leverage. A
+symbol that does not support 20x automatically uses 10x. Symbols that cannot
+support 10x, are unavailable, or are delisted are removed from the eligible
+universe without stopping the process. It refuses startup if any unmanaged
+position or order exists.
 
 ## Deploy
 

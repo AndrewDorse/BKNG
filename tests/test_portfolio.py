@@ -13,7 +13,9 @@ from kronos_futures.bot.domain import (
 )
 from kronos_futures.bot.portfolio import (
     PortfolioTradingEngine,
+    effective_leverage,
     next_scheduled_rebalance,
+    rank_candidates,
     rank_targets,
     rebalance_due,
     startup_bootstrap_due,
@@ -75,6 +77,26 @@ def test_startup_bootstrap_is_used_only_when_fixed_boundary_is_over_48_hours_awa
     )
     assert startup_bootstrap_due(after_missed_boundary, 18)
     assert not startup_bootstrap_due(close_to_boundary, 18)
+
+
+def test_leverage_falls_back_to_ten_when_symbol_cannot_support_twenty():
+    assert effective_leverage(20, 20) == 20
+    assert effective_leverage(20, 15) == 10
+    assert effective_leverage(20, 10) == 10
+    with pytest.raises(RuntimeError, match="below fallback"):
+        effective_leverage(20, 9)
+
+
+def test_rank_candidates_provides_replacements_in_momentum_order():
+    closes = {
+        symbol: (Decimal("100"), Decimal(100 + index))
+        for index, symbol in enumerate(SYMBOLS)
+    }
+
+    shorts, longs = rank_candidates(closes, 1)
+
+    assert shorts == list(SYMBOLS)
+    assert longs == list(reversed(SYMBOLS))
 
 
 class Exchange:
@@ -161,6 +183,23 @@ def test_entry_uses_two_dollar_margin_floor_and_rounds_quantity_up(tmp_path):
 
     # $2 * 20x targets $40, but Binance's $50 minimum raises this to 0.500 BTC.
     assert exchange.submissions[0].quantity == Decimal("0.500")
+
+
+def test_entry_sizes_with_symbol_specific_ten_x_fallback(tmp_path):
+    exchange = Exchange()
+    engine = PortfolioTradingEngine(settings(), exchange, str(tmp_path / "state.json"))
+    engine.rules["S0USDT"] = rules()
+    engine.leverages["S0USDT"] = 10
+    now = datetime.now(timezone.utc)
+
+    asyncio.run(
+        engine._enter(
+            "S0USDT", Side.LONG, Decimal("100"), now, now + timedelta(seconds=1), account()
+        )
+    )
+
+    assert exchange.submissions[0].quantity == Decimal("0.200")
+    assert engine.state.positions["S0USDT"]["status"] == "protected"
 
 
 def test_reconcile_rejects_unknown_position(tmp_path):
