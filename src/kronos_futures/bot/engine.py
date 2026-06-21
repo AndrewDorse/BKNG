@@ -199,7 +199,50 @@ class TradingEngine:
 
     async def run(self) -> None:
         try:
-            await self.preflight()
+            while self.running and not self.ready and not self.halted_reason:
+                try:
+                    await self.preflight()
+                except BinanceError as exc:
+                    self.last_analysis_error = f"preflight_binance_{exc.code or exc.status}"
+                    if exc.status == 429 or exc.code == -1003:
+                        LOG.error(
+                            "preflight_rate_limited",
+                            extra={
+                                "symbol": self.binding.symbol,
+                                "reason": self.last_analysis_error,
+                            },
+                        )
+                        await asyncio.sleep(60)
+                        continue
+                    self.halted_reason = self.last_analysis_error
+                    LOG.error(
+                        "binding_halted",
+                        extra={
+                            "symbol": self.binding.symbol,
+                            "reason": self.halted_reason,
+                        },
+                    )
+                    return
+                except Exception as exc:
+                    self.last_analysis_error = f"preflight_failed:{type(exc).__name__}"
+                    message = str(exc)
+                    if "not an active perpetual" in message or "Binance symbol is unavailable" in message:
+                        self.halted_reason = "invalid_symbol"
+                        LOG.error(
+                            "binding_halted",
+                            extra={
+                                "symbol": self.binding.symbol,
+                                "reason": self.halted_reason,
+                            },
+                        )
+                        return
+                    LOG.exception(
+                        "binding_preflight_failed",
+                        extra={"symbol": self.binding.symbol},
+                    )
+                    await asyncio.sleep(30)
+            if not self.ready:
+                return
             while self.running:
                 started = asyncio.get_running_loop().time()
                 try:

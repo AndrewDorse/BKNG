@@ -161,7 +161,12 @@ class BotService:
 
     @property
     def ready(self) -> bool:
-        engines = [*self.engines, *self.portfolio_engines]
+        engines = [
+            engine
+            for engine in [*self.engines, *self.portfolio_engines]
+            if not getattr(engine, "halted_reason", None)
+            and not getattr(getattr(engine, "state", None), "halted_reason", None)
+        ]
         return bool(engines) and all(engine.ready for engine in engines)
 
 

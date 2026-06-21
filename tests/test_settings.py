@@ -18,19 +18,17 @@ def test_config_loads_ema_momentum_bindings():
     settings = load_settings(Path("config/bot.yaml"))
     enabled = [binding for binding in settings.bindings if binding.enabled]
 
-    assert len(enabled) == 10
+    assert len(enabled) == 8
     assert settings.portfolios == ()
     assert {binding.symbol for binding in enabled} == {
+        "BTCUSDT",
+        "ETHUSDT",
         "BNBUSDT",
         "SOLUSDT",
+        "XRPUSDT",
         "ADAUSDT",
-        "TONUSDT",
-        "LTCUSDT",
-        "TSLAUSDT",
-        "AMZNUSDT",
-        "PLTRUSDT",
-        "ORCLUSDT",
-        "METAUSDT",
+        "DOGEUSDT",
+        "LINKUSDT",
     }
     assert all(binding.interval == "1h" for binding in enabled)
     assert all(binding.risk.leverage == 20 for binding in enabled)

@@ -186,3 +186,46 @@ def test_reconcile_ignores_external_symbol_activity():
     assert position.is_open is True
     assert position.managed is False
     assert engine.state.managed_position is False
+
+
+def test_invalid_symbol_preflight_halts_only_binding():
+    binding = BindingSettings(
+        name="bad",
+        strategy="unused",
+        symbol="TSLAUSDT",
+        interval="1h",
+        risk=RiskSettings(leverage=20, margin_fraction=0.10),
+    )
+
+    class Exchange:
+        mode = types.SimpleNamespace(value="live")
+
+        async def synchronize_time(self):
+            return None
+
+        async def position_mode_is_one_way(self):
+            return True
+
+        async def account_is_single_asset(self):
+            return True
+
+        async def symbol_is_isolated(self, symbol):
+            return True
+
+        async def symbol_rules(self, symbol):
+            raise RuntimeError(f"Binance symbol is not an active perpetual: {symbol}")
+
+    engine = TradingEngine(
+        binding,
+        strategy=types.SimpleNamespace(requires_inference=False),
+        risk=GuardedRiskEngine(binding.risk),
+        exchange=Exchange(),
+        inference=None,
+    )
+
+    import asyncio
+
+    asyncio.run(engine.run())
+
+    assert engine.ready is False
+    assert engine.halted_reason == "invalid_symbol"
