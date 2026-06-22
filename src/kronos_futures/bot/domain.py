@@ -85,6 +85,7 @@ class PositionContext:
     opened_at: datetime | None = None
     protected: bool = False
     managed: bool = True
+    metadata: Mapping[str, str] = MappingProxyType({})
 
     @property
     def is_open(self) -> bool:

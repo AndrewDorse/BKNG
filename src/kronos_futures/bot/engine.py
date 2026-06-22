@@ -54,6 +54,7 @@ class TradingEngine:
     @dataclass
     class EngineState:
         managed_position: bool = False
+        strategy_metadata: dict[str, str] | None = None
 
     def __init__(
         self,
@@ -93,17 +94,21 @@ class TradingEngine:
         if not self.state_path or not self.state_path.exists():
             return self.EngineState()
         payload = json.loads(self.state_path.read_text(encoding="utf-8"))
-        return self.EngineState(managed_position=bool(payload.get("managed_position", False)))
+        return self.EngineState(
+            managed_position=bool(payload.get("managed_position", False)),
+            strategy_metadata=dict(payload.get("strategy_metadata", {})) or None,
+        )
 
     def _save_state(self) -> None:
         if not self.state_path:
             return
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps({"managed_position": self.state.managed_position}, sort_keys=True),
-            encoding="utf-8",
-        )
+        payload = {
+            "managed_position": self.state.managed_position,
+            "strategy_metadata": self.state.strategy_metadata or {},
+        }
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
         os.replace(temporary, self.state_path)
 
     def _bot_order_prefix(self) -> str:
@@ -361,6 +366,7 @@ class TradingEngine:
             if bot_orders:
                 await self._cancel_bot_orders(self.binding.symbol, orders)
             self.state.managed_position = False
+            self.state.strategy_metadata = None
             self._save_state()
             return PositionContext(self.binding.symbol)
 
@@ -391,6 +397,7 @@ class TradingEngine:
             opened_at=snapshot.opened_at,
             protected=False,
             managed=True,
+            metadata=self.state.strategy_metadata or {},
         )
         stop_exists = any(
             order.client_order_id.startswith("kr_stop_")
@@ -474,6 +481,7 @@ class TradingEngine:
         if result.status not in {"FILLED", "PARTIALLY_FILLED"}:
             return
         self.state.managed_position = True
+        self.state.strategy_metadata = dict(intent.metadata)
         self._save_state()
         position = PositionContext(
             self.binding.symbol,
@@ -482,6 +490,7 @@ class TradingEngine:
             result.average_price,
             datetime.now(timezone.utc),
             managed=True,
+            metadata=intent.metadata,
         )
         try:
             await self.place_protection(
@@ -496,6 +505,18 @@ class TradingEngine:
             raise
         self.last_position = replace(position, protected=True)
         self.current_max_hold_minutes = intent.max_hold_minutes
+        skipped_rules = intent.metadata.get("skipped_rules", "")
+        if skipped_rules:
+            LOG.info(
+                "lower_priority_rules_skipped",
+                extra={
+                    "symbol": position.symbol,
+                    "reason": skipped_rules,
+                    "family": intent.metadata.get("family"),
+                    "strategy_id": intent.metadata.get("strategy_id"),
+                    "priority": intent.metadata.get("priority"),
+                },
+            )
         LOG.info(
             "deal_opened",
             extra={
@@ -503,6 +524,10 @@ class TradingEngine:
                 "side": position.side.value,
                 "quantity": str(position.quantity),
                 "price": str(position.entry_price),
+                "reason": intent.reason,
+                "family": intent.metadata.get("family"),
+                "strategy_id": intent.metadata.get("strategy_id"),
+                "priority": intent.metadata.get("priority"),
             },
         )
 
@@ -583,4 +608,5 @@ class TradingEngine:
             self.last_position = None
             self.current_max_hold_minutes = None
             self.state.managed_position = False
+            self.state.strategy_metadata = None
             self._save_state()

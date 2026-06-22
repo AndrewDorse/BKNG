@@ -19,6 +19,7 @@ INTERVAL_SECONDS = {
     "1m": 60,
     "15m": 15 * 60,
     "1h": 60 * 60,
+    "2h": 2 * 60 * 60,
     "4h": 4 * 60 * 60,
     "1d": 24 * 60 * 60,
 }
@@ -126,6 +127,18 @@ class CandleRule:
     parameters: MappingProxyType
 
     @property
+    def priority(self) -> int:
+        return int(self.parameters.get("priority", 999))
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.parameters.get("enabled", True))
+
+    @property
+    def strategy_id(self) -> str:
+        return str(self.parameters.get("strategy_id", self.name))
+
+    @property
     def max_hold_minutes(self) -> int:
         return int(self.hold_candles * INTERVAL_SECONDS[self.interval] / 60)
 
@@ -172,6 +185,28 @@ def _zscore(values: list[Decimal], lookback: int) -> Decimal | None:
     return Decimal(str((selected[-1] - mean(selected)) / sigma))
 
 
+def _rolling_average(values: list[Decimal], lookback: int) -> Decimal | None:
+    if len(values) < lookback or lookback <= 0:
+        return None
+    return sum(values[-lookback:], Decimal(0)) / Decimal(lookback)
+
+
+def _rolling_high(values: list[Decimal], lookback: int, *, shift: int = 0) -> Decimal | None:
+    if lookback <= 0 or len(values) < lookback + shift:
+        return None
+    end = len(values) - shift
+    start = end - lookback
+    return max(values[start:end])
+
+
+def _rolling_low(values: list[Decimal], lookback: int, *, shift: int = 0) -> Decimal | None:
+    if lookback <= 0 or len(values) < lookback + shift:
+        return None
+    end = len(values) - shift
+    start = end - lookback
+    return min(values[start:end])
+
+
 @dataclass(frozen=True)
 class CompositeCandleStrategy:
     """Deterministic candle-close rules grouped by one Binance symbol owner."""
@@ -195,6 +230,7 @@ class CompositeCandleStrategy:
                     parameters=MappingProxyType(dict(raw.get("parameters", {}))),
                 )
             )
+        parsed.sort(key=lambda item: (int(item.parameters.get("priority", 999)), item.name))
         object.__setattr__(self, "rules", tuple(parsed))
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "requires_inference", False)
@@ -203,6 +239,7 @@ class CompositeCandleStrategy:
             "_bootstrap_pending",
             {rule.name for rule in parsed if rule.parameters.get("bootstrap_once")},
         )
+        object.__setattr__(self, "_cadence_origin_slots", {})
 
     @property
     def required_intervals(self) -> tuple[str, ...]:
@@ -222,24 +259,35 @@ class CompositeCandleStrategy:
         del forecast, account
         if position.is_open:
             return SignalIntent(market.symbol, market.last.close_time, None, "position_already_open")
+        matches: list[CandleRule] = []
         for rule in self.rules:
+            if not rule.enabled:
+                continue
             candles = market.multi_timeframe.get(rule.interval, ())
             if self._matches(rule, candles):
-                last = candles[-1]
-                return SignalIntent(
-                    symbol=market.symbol,
-                    candle_close_time=last.close_time,
-                    side=rule.side,
-                    reason=rule.name,
-                    metadata={
-                        "rule": rule.name,
-                        "family": rule.family,
-                        "interval": rule.interval,
-                    },
-                    target_pct=rule.target_pct,
-                    stop_pct=rule.stop_pct,
-                    max_hold_minutes=rule.max_hold_minutes,
-                )
+                matches.append(rule)
+        if matches:
+            selected = matches[0]
+            candles = market.multi_timeframe.get(selected.interval, ())
+            last = candles[-1]
+            skipped = ",".join(rule.name for rule in matches[1:])
+            return SignalIntent(
+                symbol=market.symbol,
+                candle_close_time=last.close_time,
+                side=selected.side,
+                reason=selected.name,
+                metadata={
+                    "rule": selected.name,
+                    "family": selected.family,
+                    "interval": selected.interval,
+                    "strategy_id": selected.strategy_id,
+                    "priority": str(selected.priority),
+                    "skipped_rules": skipped,
+                },
+                target_pct=selected.target_pct,
+                stop_pct=selected.stop_pct,
+                max_hold_minutes=selected.max_hold_minutes,
+            )
         return SignalIntent(market.symbol, market.last.close_time, None, "no_rule_signal")
 
     def _matches(self, rule: CandleRule, candles: tuple) -> bool:
@@ -298,15 +346,64 @@ class CompositeCandleStrategy:
             if not directional_match:
                 return False
             cadence_hours = int(params.get("cadence_hours", 0))
+            interval_hours = INTERVAL_SECONDS[rule.interval] // 3600
+            if interval_hours <= 0 or (cadence_hours > 0 and cadence_hours % interval_hours):
+                raise ValueError(f"Invalid ema_momentum cadence for interval {rule.interval}")
+            slot = int(last.open_time.timestamp() // 3600)
             if rule.name in self._bootstrap_pending:
                 self._bootstrap_pending.remove(rule.name)
+                self._cadence_origin_slots[rule.name] = slot
                 return True
             if cadence_hours <= 0:
                 return True
-            interval_hours = INTERVAL_SECONDS[rule.interval] // 3600
-            if interval_hours <= 0 or cadence_hours % interval_hours:
-                raise ValueError(f"Invalid ema_momentum cadence for interval {rule.interval}")
-            slot = int(last.open_time.timestamp() // 3600)
             cadence_slots = cadence_hours // interval_hours
-            return slot % cadence_slots == 0
+            origin_slot = self._cadence_origin_slots.get(rule.name)
+            if origin_slot is None:
+                self._cadence_origin_slots[rule.name] = slot
+                origin_slot = slot
+            if slot <= origin_slot:
+                return False
+            return (slot - origin_slot) % cadence_slots == 0
+        if rule.family == "orb":
+            if len(candles) < max(205, int(params.get("breakout", 4)) + 21):
+                return False
+            bars = int(params.get("breakout", 4))
+            prior_high = _rolling_high([candle.high for candle in candles], bars, shift=1)
+            prior_low = _rolling_low([candle.low for candle in candles], bars, shift=1)
+            average_volume = _rolling_average([candle.volume for candle in candles[:-1]], 20)
+            if prior_high is None or prior_low is None or average_volume is None or average_volume <= 0:
+                return False
+            volume_ok = last.volume > average_volume
+            if rule.side is Side.LONG:
+                return last.close > prior_high and last.close > last.open and volume_ok
+            return last.close < prior_low and last.close < last.open and volume_ok
+        if rule.family == "breakout_expansion":
+            lookback = int(params.get("lookback", 24))
+            breakout = int(params.get("breakout", 20))
+            if len(candles) < max(205, lookback * 2 + breakout + 2):
+                return False
+            highs = [candle.high for candle in candles]
+            lows = [candle.low for candle in candles]
+            volumes = [candle.volume for candle in candles]
+            breakout_high = _rolling_high(highs, breakout, shift=1)
+            breakout_low = _rolling_low(lows, breakout, shift=1)
+            average_volume = _rolling_average(volumes[:-1], lookback)
+            if breakout_high is None or breakout_low is None or average_volume is None or average_volume <= 0:
+                return False
+            current_range = _rolling_high(highs, lookback) - _rolling_low(lows, lookback)
+            compression_samples: list[Decimal] = []
+            for shift in range(1, lookback * 2 + 1):
+                high_sample = _rolling_high(highs, lookback, shift=shift)
+                low_sample = _rolling_low(lows, lookback, shift=shift)
+                if high_sample is None or low_sample is None:
+                    continue
+                compression_samples.append(high_sample - low_sample)
+            if not compression_samples:
+                return False
+            compression_threshold = sorted(compression_samples)[len(compression_samples) // 2]
+            compressed = current_range <= compression_threshold
+            volume_ok = last.volume >= average_volume
+            if rule.side is Side.LONG:
+                return compressed and volume_ok and last.close > breakout_high and last.close > last.open
+            return compressed and volume_ok and last.close < breakout_low and last.close < last.open
         raise ValueError(f"Unsupported candle rule family: {rule.family}")

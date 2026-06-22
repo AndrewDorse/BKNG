@@ -43,6 +43,9 @@ class JsonFormatter(logging.Formatter):
             "leverage",
             "margin_fraction",
             "symbols",
+            "family",
+            "strategy_id",
+            "priority",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
@@ -98,6 +101,9 @@ class BotService:
                         "symbol": engine.last_position.symbol,
                         "side": engine.last_position.side.value,
                         "managed": engine.last_position.managed,
+                        "family": engine.last_position.metadata.get("family", ""),
+                        "strategy_id": engine.last_position.metadata.get("strategy_id", ""),
+                        "priority": engine.last_position.metadata.get("priority", ""),
                     }
                     for engine in self.engines
                     if engine.last_position and engine.last_position.is_open

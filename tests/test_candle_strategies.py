@@ -16,17 +16,19 @@ def make_candles(
     closes: list[Decimal],
     *,
     interval_minutes: int = 60,
-    last_open: Decimal | None = None,
-    last_high: Decimal | None = None,
-    last_low: Decimal | None = None,
+    opens: list[Decimal] | None = None,
+    highs: list[Decimal] | None = None,
+    lows: list[Decimal] | None = None,
+    volumes: list[Decimal] | None = None,
 ) -> tuple[Candle, ...]:
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     candles = []
     for index, close in enumerate(closes):
         open_time = start + timedelta(minutes=interval_minutes * index)
-        open_ = close if index != len(closes) - 1 or last_open is None else last_open
-        high = close if index != len(closes) - 1 or last_high is None else last_high
-        low = close if index != len(closes) - 1 or last_low is None else last_low
+        open_ = opens[index] if opens is not None else close
+        high = highs[index] if highs is not None else close
+        low = lows[index] if lows is not None else close
+        volume = volumes[index] if volumes is not None else Decimal("1")
         candles.append(
             Candle(
                 open_time=open_time,
@@ -35,7 +37,7 @@ def make_candles(
                 high=high,
                 low=low,
                 close=close,
-                volume=Decimal("1"),
+                volume=volume,
                 amount=Decimal("1"),
             )
         )
@@ -84,9 +86,9 @@ def test_range_fade_short_rule_fires_with_signal_overrides():
     closes = [Decimal("100")] * 200 + [Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("101")]
     candles = make_candles(
         closes,
-        last_open=Decimal("100"),
-        last_high=Decimal("103"),
-        last_low=Decimal("99"),
+        opens=[Decimal("100")] * len(closes),
+        highs=[Decimal("100")] * (len(closes) - 1) + [Decimal("103")],
+        lows=[Decimal("100")] * (len(closes) - 1) + [Decimal("99")],
     )
 
     intent = evaluate(strategy, candles)
@@ -115,9 +117,9 @@ def test_range_fade_long_rule_fires():
     closes = [Decimal("100")] * 200 + [Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("99")]
     candles = make_candles(
         closes,
-        last_open=Decimal("100"),
-        last_high=Decimal("102"),
-        last_low=Decimal("98"),
+        opens=[Decimal("100")] * len(closes),
+        highs=[Decimal("100")] * (len(closes) - 1) + [Decimal("102")],
+        lows=[Decimal("100")] * (len(closes) - 1) + [Decimal("98")],
     )
 
     assert evaluate(strategy, candles).side is Side.LONG
@@ -262,7 +264,12 @@ def test_priority_uses_first_matching_rule():
         ]
     )
     closes = [Decimal("100")] * 200 + [Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("101")]
-    candles = make_candles(closes, last_open=Decimal("100"), last_high=Decimal("103"), last_low=Decimal("99"))
+    candles = make_candles(
+        closes,
+        opens=[Decimal("100")] * len(closes),
+        highs=[Decimal("100")] * (len(closes) - 1) + [Decimal("103")],
+        lows=[Decimal("100")] * (len(closes) - 1) + [Decimal("99")],
+    )
 
     assert evaluate(strategy, candles).reason == "first"
 
@@ -272,3 +279,124 @@ def test_rsi_uses_wilder_smoothing_across_history():
         [Decimal("100"), Decimal("101"), Decimal("100"), Decimal("101")],
         2,
     ) == Decimal("75")
+
+
+def test_priority_uses_explicit_priority_not_rule_order():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "later_in_list",
+                "family": "range_fade",
+                "interval": "1h",
+                "side": "SHORT",
+                "target_pct": "0.015",
+                "stop_pct": "0.10",
+                "hold_candles": 6,
+                "parameters": {"range": "0.02", "move": "0.003", "priority": 9},
+            },
+            {
+                "name": "higher_priority",
+                "family": "range_fade",
+                "interval": "1h",
+                "side": "SHORT",
+                "target_pct": "0.005",
+                "stop_pct": "0.02",
+                "hold_candles": 4,
+                "parameters": {"range": "0.02", "move": "0.003", "priority": 1},
+            },
+        ]
+    )
+    closes = [Decimal("100")] * 200 + [Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("101")]
+    candles = make_candles(
+        closes,
+        opens=[Decimal("100")] * len(closes),
+        highs=[Decimal("100")] * (len(closes) - 1) + [Decimal("103")],
+        lows=[Decimal("100")] * (len(closes) - 1) + [Decimal("99")],
+    )
+
+    assert evaluate(strategy, candles).reason == "higher_priority"
+
+
+def test_disabled_rule_is_ignored():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "disabled_match",
+                "family": "range_fade",
+                "interval": "1h",
+                "side": "SHORT",
+                "target_pct": "0.005",
+                "stop_pct": "0.02",
+                "hold_candles": 4,
+                "parameters": {"range": "0.02", "move": "0.003", "enabled": False, "priority": 1},
+            }
+        ]
+    )
+    closes = [Decimal("100")] * 200 + [Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("101")]
+    candles = make_candles(
+        closes,
+        opens=[Decimal("100")] * len(closes),
+        highs=[Decimal("100")] * (len(closes) - 1) + [Decimal("103")],
+        lows=[Decimal("100")] * (len(closes) - 1) + [Decimal("99")],
+    )
+
+    assert evaluate(strategy, candles).side is None
+
+
+def test_orb_rule_fires():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "orb_long",
+                "family": "orb",
+                "interval": "2h",
+                "side": "LONG",
+                "target_pct": "0.02",
+                "stop_pct": "0.01",
+                "hold_candles": 6,
+                "parameters": {"breakout": 4, "priority": 1},
+            }
+        ]
+    )
+    closes = [Decimal("100")] * 220
+    closes[-1] = Decimal("106")
+    opens = [Decimal("100")] * 220
+    highs = [Decimal("101")] * 220
+    lows = [Decimal("99")] * 220
+    volumes = [Decimal("1")] * 220
+    opens[-1] = Decimal("103")
+    highs[-1] = Decimal("107")
+    lows[-1] = Decimal("103")
+    volumes[-1] = Decimal("5")
+    candles = make_candles(closes, interval_minutes=120, opens=opens, highs=highs, lows=lows, volumes=volumes)
+
+    assert evaluate(strategy, candles, "2h").side is Side.LONG
+
+
+def test_breakout_expansion_rule_fires():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "vol_long",
+                "family": "breakout_expansion",
+                "interval": "1h",
+                "side": "LONG",
+                "target_pct": "0.02",
+                "stop_pct": "0.01",
+                "hold_candles": 8,
+                "parameters": {"lookback": 24, "breakout": 20, "priority": 1},
+            }
+        ]
+    )
+    closes = [Decimal("100")] * 250
+    opens = [Decimal("100")] * 250
+    highs = [Decimal("110")] * 220 + [Decimal("102")] * 30
+    lows = [Decimal("90")] * 220 + [Decimal("99")] * 30
+    volumes = [Decimal("1")] * 249 + [Decimal("3")]
+    closes[-1] = Decimal("111")
+    opens[-1] = Decimal("105")
+    highs[-1] = Decimal("111")
+    lows[-1] = Decimal("105")
+    candles = make_candles(closes, opens=opens, highs=highs, lows=lows, volumes=volumes)
+
+    assert evaluate(strategy, candles, "1h").side is Side.LONG
