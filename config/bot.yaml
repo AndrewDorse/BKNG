@@ -9,7 +9,7 @@ health:
 bindings:
   - name: tsla_portfolio_live
     strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: TSLA
+    symbol: TSLAUSDT
     interval: 1h
     validated: true
     parameters:
@@ -72,7 +72,7 @@ bindings:
 
   - name: meta_portfolio_live
     strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: META
+    symbol: METAUSDT
     interval: 1h
     validated: true
     parameters:
@@ -198,7 +198,7 @@ bindings:
 
   - name: googl_portfolio_live
     strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: GOOGL
+    symbol: GOOGLUSDT
     interval: 1h
     validated: true
     parameters:
@@ -385,9 +385,261 @@ bindings:
       target_pct: 0.02
       max_drawdown_pct: 0.25
 
+  - name: btcusdt_portfolio_live
+    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
+    symbol: BTCUSDT
+    interval: 1h
+    validated: true
+    parameters:
+      name: pair_portfolio_live
+      rules:
+        - name: btcusdt_orb_4_72h_long
+          family: orb
+          interval: 1h
+          side: LONG
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 72
+          parameters: {breakout: 4, priority: 1, strategy_id: btcusdt_orb, enabled: true}
+        - name: btcusdt_orb_4_72h_short
+          family: orb
+          interval: 1h
+          side: SHORT
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 72
+          parameters: {breakout: 4, priority: 1, strategy_id: btcusdt_orb, enabled: true}
+        - name: btcusdt_vol_24_20_12h_long
+          family: breakout_expansion
+          interval: 4h
+          side: LONG
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 2, strategy_id: btcusdt_vol, enabled: false}
+        - name: btcusdt_vol_24_20_12h_short
+          family: breakout_expansion
+          interval: 4h
+          side: SHORT
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 2, strategy_id: btcusdt_vol, enabled: false}
+        - name: btcusdt_ema_12_50_72h_long
+          family: ema_momentum
+          interval: 1h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 72
+          parameters: {fast: 12, slow: 50, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: btcusdt_ema, enabled: false}
+        - name: btcusdt_ema_12_50_72h_short
+          family: ema_momentum
+          interval: 1h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 72
+          parameters: {fast: 12, slow: 50, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: btcusdt_ema, enabled: false}
+    risk:
+      leverage: 20
+      margin_fraction: 0.05
+      stop_pct: 0.01
+      target_pct: 0.02
+      max_drawdown_pct: 0.25
+
+  - name: xrpusdt_portfolio_live
+    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
+    symbol: XRPUSDT
+    interval: 1h
+    validated: true
+    parameters:
+      name: pair_portfolio_live
+      rules:
+        - name: xrpusdt_vol_24_20_12h_long
+          family: breakout_expansion
+          interval: 4h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 1, strategy_id: xrpusdt_vol, enabled: true}
+        - name: xrpusdt_vol_24_20_12h_short
+          family: breakout_expansion
+          interval: 4h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 1, strategy_id: xrpusdt_vol, enabled: true}
+        - name: xrpusdt_orb_4_72h_long
+          family: orb
+          interval: 2h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {breakout: 4, priority: 2, strategy_id: xrpusdt_orb, enabled: false}
+        - name: xrpusdt_orb_4_72h_short
+          family: orb
+          interval: 2h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {breakout: 4, priority: 2, strategy_id: xrpusdt_orb, enabled: false}
+        - name: xrpusdt_ema_20_60_72h_long
+          family: ema_momentum
+          interval: 2h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 60, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: xrpusdt_ema, enabled: false}
+        - name: xrpusdt_ema_20_60_72h_short
+          family: ema_momentum
+          interval: 2h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 60, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: xrpusdt_ema, enabled: false}
+    risk:
+      leverage: 20
+      margin_fraction: 0.05
+      stop_pct: 0.01
+      target_pct: 0.02
+      max_drawdown_pct: 0.25
+
+  - name: bnbusdt_portfolio_live
+    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
+    symbol: BNBUSDT
+    interval: 1h
+    validated: true
+    parameters:
+      name: pair_portfolio_live
+      rules:
+        - name: bnbusdt_vol_20_20_4h_long
+          family: breakout_expansion
+          interval: 1h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 4
+          parameters: {lookback: 20, breakout: 20, priority: 1, strategy_id: bnbusdt_vol, enabled: true}
+        - name: bnbusdt_vol_20_20_4h_short
+          family: breakout_expansion
+          interval: 1h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 4
+          parameters: {lookback: 20, breakout: 20, priority: 1, strategy_id: bnbusdt_vol, enabled: true}
+        - name: bnbusdt_ema_20_80_72h_long
+          family: ema_momentum
+          interval: 2h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 80, cadence_hours: 72, bootstrap_once: true, priority: 2, strategy_id: bnbusdt_ema, enabled: false}
+        - name: bnbusdt_ema_20_80_72h_short
+          family: ema_momentum
+          interval: 2h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 80, cadence_hours: 72, bootstrap_once: true, priority: 2, strategy_id: bnbusdt_ema, enabled: false}
+        - name: bnbusdt_orb_4_12h_long
+          family: orb
+          interval: 1h
+          side: LONG
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 12
+          parameters: {breakout: 4, priority: 3, strategy_id: bnbusdt_orb, enabled: false}
+        - name: bnbusdt_orb_4_12h_short
+          family: orb
+          interval: 1h
+          side: SHORT
+          target_pct: 0.015
+          stop_pct: 0.01
+          hold_candles: 12
+          parameters: {breakout: 4, priority: 3, strategy_id: bnbusdt_orb, enabled: false}
+    risk:
+      leverage: 20
+      margin_fraction: 0.05
+      stop_pct: 0.01
+      target_pct: 0.02
+      max_drawdown_pct: 0.25
+
+  - name: dogeusdt_portfolio_live
+    strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
+    symbol: DOGEUSDT
+    interval: 1h
+    validated: true
+    parameters:
+      name: pair_portfolio_live
+      rules:
+        - name: dogeusdt_vol_24_20_12h_long
+          family: breakout_expansion
+          interval: 4h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 1, strategy_id: dogeusdt_vol, enabled: true}
+        - name: dogeusdt_vol_24_20_12h_short
+          family: breakout_expansion
+          interval: 4h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 3
+          parameters: {lookback: 24, breakout: 20, priority: 1, strategy_id: dogeusdt_vol, enabled: true}
+        - name: dogeusdt_orb_4_72h_long
+          family: orb
+          interval: 2h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {breakout: 4, priority: 2, strategy_id: dogeusdt_orb, enabled: false}
+        - name: dogeusdt_orb_4_72h_short
+          family: orb
+          interval: 2h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {breakout: 4, priority: 2, strategy_id: dogeusdt_orb, enabled: false}
+        - name: dogeusdt_ema_20_60_72h_long
+          family: ema_momentum
+          interval: 2h
+          side: LONG
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 60, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: dogeusdt_ema, enabled: false}
+        - name: dogeusdt_ema_20_60_72h_short
+          family: ema_momentum
+          interval: 2h
+          side: SHORT
+          target_pct: 0.02
+          stop_pct: 0.01
+          hold_candles: 36
+          parameters: {fast: 20, slow: 60, cadence_hours: 72, bootstrap_once: true, priority: 3, strategy_id: dogeusdt_ema, enabled: false}
+    risk:
+      leverage: 20
+      margin_fraction: 0.05
+      stop_pct: 0.01
+      target_pct: 0.02
+      max_drawdown_pct: 0.25
+
   - name: pltr_portfolio_live
     strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: PLTR
+    symbol: PLTRUSDT
     interval: 1h
     validated: true
     parameters:
@@ -450,7 +702,7 @@ bindings:
 
   - name: aapl_portfolio_live
     strategy: kronos_futures.bot.strategies:CompositeCandleStrategy
-    symbol: AAPL
+    symbol: AAPLUSDT
     interval: 1h
     validated: true
     parameters:

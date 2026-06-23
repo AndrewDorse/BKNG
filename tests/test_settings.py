@@ -18,17 +18,21 @@ def test_config_loads_pair_portfolio_bindings():
     settings = load_settings(Path("config/bot.yaml"))
     enabled = [binding for binding in settings.bindings if binding.enabled]
 
-    assert len(enabled) == 8
+    assert len(enabled) == 12
     assert settings.portfolios == ()
     assert {binding.symbol for binding in enabled} == {
-        "TSLA",
-        "META",
-        "GOOGL",
-        "PLTR",
-        "AAPL",
+        "TSLAUSDT",
+        "METAUSDT",
+        "GOOGLUSDT",
+        "PLTRUSDT",
+        "AAPLUSDT",
         "ETHUSDT",
         "SOLUSDT",
         "ADAUSDT",
+        "BTCUSDT",
+        "XRPUSDT",
+        "BNBUSDT",
+        "DOGEUSDT",
     }
     assert all(binding.interval == "1h" for binding in enabled)
     assert all(binding.risk.leverage == 20 for binding in enabled)

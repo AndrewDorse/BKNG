@@ -304,7 +304,35 @@ class TradingEngine:
         candles = new_contexts[primary_interval]
         latest = candles[-1]
         self.last_analyzed_candle = latest.open_time
-        if position.is_open or self.halted_reason:
+        if position.is_open:
+            LOG.info(
+                "signal_skipped",
+                extra={
+                    "binding": self.binding.name,
+                    "symbol": self.binding.symbol,
+                    "interval": primary_interval,
+                    "candle_close_time": latest.close_time.isoformat(),
+                    "outcome": "position_open",
+                    "reason": (
+                        "managed_position_open"
+                        if position.managed
+                        else "external_position_open"
+                    ),
+                },
+            )
+            return
+        if self.halted_reason:
+            LOG.info(
+                "signal_skipped",
+                extra={
+                    "binding": self.binding.name,
+                    "symbol": self.binding.symbol,
+                    "interval": primary_interval,
+                    "candle_close_time": latest.close_time.isoformat(),
+                    "outcome": "binding_halted",
+                    "reason": self.halted_reason,
+                },
+            )
             return
 
         bid, ask = await self.exchange.book_ticker(self.binding.symbol)
@@ -338,6 +366,22 @@ class TradingEngine:
         intent = self.strategy.evaluate(market, forecast, position, account)
         approved, reason = self.risk.approve_entry(
             intent, market, forecast, account, self.rules
+        )
+        outcome = "approved" if approved else ("no_signal" if intent.side is None else "rejected")
+        LOG.info(
+            "signal_evaluated",
+            extra={
+                "binding": self.binding.name,
+                "symbol": self.binding.symbol,
+                "interval": primary_interval,
+                "candle_close_time": latest.close_time.isoformat(),
+                "outcome": outcome,
+                "reason": reason,
+                "side": intent.side.value if intent.side else None,
+                "family": intent.metadata.get("family"),
+                "strategy_id": intent.metadata.get("strategy_id"),
+                "priority": intent.metadata.get("priority"),
+            },
         )
         SIGNALS.labels(self.binding.name, "approved" if approved else reason).inc()
         if approved:

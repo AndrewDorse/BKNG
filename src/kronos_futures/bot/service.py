@@ -34,6 +34,7 @@ class JsonFormatter(logging.Formatter):
         }
         for key in (
             "symbol",
+            "binding",
             "mode",
             "bindings",
             "side",
@@ -46,6 +47,9 @@ class JsonFormatter(logging.Formatter):
             "family",
             "strategy_id",
             "priority",
+            "outcome",
+            "interval",
+            "candle_close_time",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
@@ -93,7 +97,7 @@ class BotService:
         logger = logging.getLogger(__name__)
         while self.live:
             now = datetime.now(timezone.utc)
-            slot = int(now.timestamp() // (4 * 60 * 60))
+            slot = int(now.timestamp() // (60 * 60))
             if self._last_heartbeat_slot != slot:
                 self._last_heartbeat_slot = slot
                 open_deals = [
