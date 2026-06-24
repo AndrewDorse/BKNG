@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from kronos_futures.bot.domain import AccountContext, Candle, MarketContext, SymbolRules
+from kronos_futures.bot.domain import SignalIntent, Side, ForecastContext
 from kronos_futures.bot.risk import GuardedRiskEngine
 from kronos_futures.bot.settings import RiskSettings
 
@@ -141,3 +142,32 @@ def test_stop_risk_sizing_reduces_notional_for_wide_stop():
     assert quantity == Decimal("0.002")
     assert notional == Decimal("100.000")
     assert notional * Decimal("0.10") == account.equity * Decimal("0.01")
+
+
+def test_approve_entry_skips_signal_age_for_deterministic_rules():
+    account, market, rules = contexts("1000", "50000")
+    stale_forecast = ForecastContext(
+        generated_at=market.last.close_time + timedelta(hours=1),
+        close_paths=(market.last.close,),
+        seed=0,
+        latency_ms=0,
+    )
+    intent = SignalIntent(
+        symbol="BTCUSDT",
+        candle_close_time=market.last.close_time,
+        side=Side.LONG,
+        reason="test_signal",
+    )
+    risk = GuardedRiskEngine(RiskSettings(leverage=10, margin_fraction=0.05))
+
+    approved, reason = risk.approve_entry(
+        intent,
+        market,
+        stale_forecast,
+        account,
+        rules,
+        enforce_signal_age=False,
+    )
+
+    assert approved is True
+    assert reason == "approved"

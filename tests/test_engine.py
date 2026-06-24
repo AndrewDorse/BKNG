@@ -69,6 +69,17 @@ def test_contiguous_rejects_missing_minute():
     assert contiguous(candles, 60) is False
 
 
+def test_contiguous_accepts_session_gaps_when_enabled():
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    candles = (
+        candle(start),
+        candle(start + timedelta(hours=1)),
+        candle(start + timedelta(hours=3)),
+    )
+
+    assert contiguous(candles, 60 * 60, required=3, allow_gaps=True) is True
+
+
 def test_interval_seconds_supports_strategy_timeframes():
     assert interval_seconds("15m") == 15 * 60
     assert interval_seconds("1h") == 60 * 60

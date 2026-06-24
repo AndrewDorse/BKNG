@@ -170,6 +170,7 @@ class BinanceGateway:
             minimum_notional=Decimal(notional.get("notional", "0")),
             maximum_quantity=Decimal(lot["maxQty"]),
             maximum_leverage=maximum_leverage,
+            contract_type=match.get("contractType", "PERPETUAL"),
         )
         self._rules[symbol] = rules
         return rules

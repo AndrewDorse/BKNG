@@ -124,6 +124,7 @@ class SymbolRules:
     minimum_notional: Decimal
     maximum_quantity: Decimal
     maximum_leverage: int
+    contract_type: str = "PERPETUAL"
 
 
 @dataclass(frozen=True)

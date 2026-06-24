@@ -33,10 +33,16 @@ def client_order_id(binding: str, close_time: datetime, purpose: str) -> str:
     return f"kr_{purpose[:4]}_{digest}"
 
 
-def contiguous(candles, interval_seconds: int, required: int = 512) -> bool:
+def contiguous(
+    candles, interval_seconds: int, required: int = 512, *, allow_gaps: bool = False
+) -> bool:
     if len(candles) < required or not all(candle.closed for candle in candles[-required:]):
         return False
     selected = candles[-required:]
+    if allow_gaps:
+        return all(
+            right.open_time > left.open_time for left, right in zip(selected, selected[1:])
+        )
     return all(
         int((right.open_time - left.open_time).total_seconds()) == interval_seconds
         for left, right in zip(selected, selected[1:])
@@ -144,6 +150,9 @@ class TradingEngine:
     def required_candles(self) -> int:
         return int(getattr(self.strategy, "required_candles", 512))
 
+    def _allow_session_gaps(self) -> bool:
+        return bool(self.rules and self.rules.contract_type == "TRADIFI_PERPETUAL")
+
     async def preflight(self) -> None:
         if self.requires_inference:
             attempts = 0
@@ -185,7 +194,12 @@ class TradingEngine:
                 self.binding.symbol, interval, limit=required + 1
             )
             candles = tuple(candles[-required:])
-            if not contiguous(candles, interval_seconds(interval), required):
+            if not contiguous(
+                candles,
+                interval_seconds(interval),
+                required,
+                allow_gaps=self._allow_session_gaps(),
+            ):
                 raise RuntimeError(
                     f"Initial {interval} candle history is not contiguous for {self.binding.symbol}"
                 )
@@ -289,7 +303,12 @@ class TradingEngine:
                     self.binding.symbol, interval, limit=required + 1
                 ))[-required:]
             )
-            if not contiguous(candles, interval_seconds(interval), required):
+            if not contiguous(
+                candles,
+                interval_seconds(interval),
+                required,
+                allow_gaps=self._allow_session_gaps(),
+            ):
                 raise RuntimeError(
                     f"Binance returned non-contiguous {interval} candle history"
                 )
@@ -365,7 +384,12 @@ class TradingEngine:
         self.last_analysis_error = None
         intent = self.strategy.evaluate(market, forecast, position, account)
         approved, reason = self.risk.approve_entry(
-            intent, market, forecast, account, self.rules
+            intent,
+            market,
+            forecast,
+            account,
+            self.rules,
+            enforce_signal_age=self.requires_inference,
         )
         outcome = "approved" if approved else ("no_signal" if intent.side is None else "rejected")
         LOG.info(

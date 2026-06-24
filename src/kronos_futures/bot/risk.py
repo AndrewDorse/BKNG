@@ -36,6 +36,8 @@ class GuardedRiskEngine:
         forecast: ForecastContext,
         account: AccountContext,
         rules: SymbolRules,
+        *,
+        enforce_signal_age: bool = True,
     ) -> tuple[bool, str]:
         if intent.side is None:
             return False, intent.reason
@@ -43,9 +45,10 @@ class GuardedRiskEngine:
             drawdown = (account.peak_equity - account.equity) / account.peak_equity
             if drawdown >= Decimal(str(self.settings.max_drawdown_pct)):
                 return False, "account_drawdown_limit"
-        age = (forecast.generated_at - market.last.close_time).total_seconds()
-        if age < 0 or age > self.settings.maximum_signal_age_seconds:
-            return False, "stale_forecast"
+        if enforce_signal_age:
+            age = (forecast.generated_at - market.last.close_time).total_seconds()
+            if age < 0 or age > self.settings.maximum_signal_age_seconds:
+                return False, "stale_forecast"
         midpoint = (market.bid + market.ask) / Decimal(2)
         if midpoint <= 0:
             return False, "invalid_market_price"
