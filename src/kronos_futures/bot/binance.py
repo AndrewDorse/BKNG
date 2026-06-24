@@ -144,7 +144,10 @@ class BinanceGateway:
             match = self._exchange_info[symbol]
         except KeyError as exc:
             raise RuntimeError(f"Binance symbol is unavailable: {symbol}") from exc
-        if match.get("status") != "TRADING" or match.get("contractType") != "PERPETUAL":
+        if match.get("status") != "TRADING" or match.get("contractType") not in {
+            "PERPETUAL",
+            "TRADIFI_PERPETUAL",
+        }:
             raise RuntimeError(f"Binance symbol is not an active perpetual: {symbol}")
         filters = {item["filterType"]: item for item in match["filters"]}
         lot = filters["LOT_SIZE"]

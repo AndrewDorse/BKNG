@@ -234,3 +234,28 @@ def test_signed_post_resynchronizes_and_retries_timestamp_rejection():
 
     assert result == {"ok": True}
     assert gateway.client.calls == 2
+
+
+def test_symbol_rules_accepts_tradifi_perpetual_contract():
+    gateway = object.__new__(BinanceGateway)
+    gateway.api_key = ""
+    gateway._rules = {}
+    gateway._exchange_info = {
+        "TSLAUSDT": {
+            "symbol": "TSLAUSDT",
+            "status": "TRADING",
+            "contractType": "TRADIFI_PERPETUAL",
+            "filters": [
+                {"filterType": "LOT_SIZE", "minQty": "0.01", "maxQty": "20000", "stepSize": "0.01"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01000"},
+                {"filterType": "MIN_NOTIONAL", "notional": "5"},
+            ],
+        }
+    }
+
+    rules = asyncio.run(gateway.symbol_rules("TSLAUSDT"))
+
+    assert rules.symbol == "TSLAUSDT"
+    assert rules.price_tick == Decimal("0.01000")
+    assert rules.quantity_step == Decimal("0.01")
+    assert rules.minimum_notional == Decimal("5")
