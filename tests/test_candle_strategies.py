@@ -400,3 +400,32 @@ def test_breakout_expansion_rule_fires():
     candles = make_candles(closes, opens=opens, highs=highs, lows=lows, volumes=volumes)
 
     assert evaluate(strategy, candles, "1h").side is Side.LONG
+
+
+def test_required_candles_tracks_enabled_rule_lookbacks():
+    strategy = CompositeCandleStrategy(
+        rules=[
+            {
+                "name": "orb_disabled",
+                "family": "orb",
+                "interval": "1h",
+                "side": "LONG",
+                "target_pct": "0.02",
+                "stop_pct": "0.01",
+                "hold_candles": 8,
+                "parameters": {"breakout": 4, "enabled": False},
+            },
+            {
+                "name": "ema_enabled",
+                "family": "ema_momentum",
+                "interval": "1h",
+                "side": "LONG",
+                "target_pct": "0.02",
+                "stop_pct": "0.01",
+                "hold_candles": 72,
+                "parameters": {"fast": 20, "slow": 80, "enabled": True},
+            },
+        ]
+    )
+
+    assert strategy.required_candles == 250

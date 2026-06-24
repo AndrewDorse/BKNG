@@ -247,7 +247,32 @@ class CompositeCandleStrategy:
 
     @property
     def required_candles(self) -> int:
-        return 512
+        enabled = [rule for rule in self.rules if rule.enabled]
+        if not enabled:
+            return 205
+        return max(self._required_candles_for_rule(rule) for rule in enabled)
+
+    @staticmethod
+    def _required_candles_for_rule(rule: CandleRule) -> int:
+        params = rule.parameters
+        family = rule.family
+        if family == "range_fade":
+            return 5
+        if family == "pullback_trend":
+            return 250
+        if family == "rsi2_reversion":
+            return 250
+        if family == "bollinger_reversion":
+            return 250
+        if family == "ema_momentum":
+            return 250
+        if family == "orb":
+            return max(205, int(params.get("breakout", 4)) + 21)
+        if family == "breakout_expansion":
+            lookback = int(params.get("lookback", 24))
+            breakout = int(params.get("breakout", 20))
+            return max(205, lookback * 2 + breakout + 2)
+        raise ValueError(f"Unsupported candle rule family: {family}")
 
     def evaluate(
         self,
