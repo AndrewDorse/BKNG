@@ -29,6 +29,9 @@ class Metric:
     def observe(self, *args, **kwargs):
         pass
 
+    def inc(self, *args, **kwargs):
+        pass
+
 
 sys.modules.setdefault(
     "prometheus_client",
@@ -240,3 +243,97 @@ def test_invalid_symbol_preflight_halts_only_binding():
 
     assert engine.ready is False
     assert engine.halted_reason == "invalid_symbol"
+
+
+def test_enter_recovers_entry_price_from_position_snapshot_when_order_avg_price_is_zero():
+    now = datetime.now(timezone.utc)
+    binding = BindingSettings(
+        name="tradfi",
+        strategy="unused",
+        symbol="TSLAUSDT",
+        interval="1h",
+        risk=RiskSettings(leverage=20, margin_fraction=0.05),
+    )
+    market = MarketContext(
+        symbol="TSLAUSDT",
+        interval="1h",
+        candles=(candle(now),),
+        bid=Decimal("1.20"),
+        ask=Decimal("1.20"),
+        observed_at=now,
+    )
+    account = AccountContext(
+        equity=Decimal("1000"),
+        available_balance=Decimal("1000"),
+        peak_equity=Decimal("1000"),
+        daily_realized_pnl=Decimal(0),
+        consecutive_losses=0,
+    )
+    submitted = []
+
+    class Exchange:
+        async def submit_order(self, request):
+            submitted.append(request)
+            from kronos_futures.bot.domain import OrderResult
+
+            if request.order_type == "MARKET":
+                return OrderResult(
+                    symbol="TSLAUSDT",
+                    client_order_id=request.client_order_id,
+                    order_id=1,
+                    status="FILLED",
+                    executed_quantity=Decimal("0.10"),
+                    average_price=Decimal("0"),
+                    order_type="MARKET",
+                )
+            return OrderResult(
+                symbol="TSLAUSDT",
+                client_order_id=request.client_order_id,
+                order_id=2,
+                status="NEW",
+                executed_quantity=Decimal("0"),
+                average_price=Decimal("0"),
+                order_type=request.order_type,
+            )
+
+        async def positions(self):
+            from kronos_futures.bot.domain import PositionSnapshot
+
+            return [
+                PositionSnapshot(
+                    symbol="TSLAUSDT",
+                    quantity=Decimal("-0.10"),
+                    entry_price=Decimal("1.23"),
+                    isolated=True,
+                    leverage=20,
+                    opened_at=now,
+                )
+            ]
+
+    engine = TradingEngine(
+        binding,
+        strategy=None,
+        risk=GuardedRiskEngine(binding.risk),
+        exchange=Exchange(),
+        inference=None,
+    )
+    engine.rules = SymbolRules(
+        symbol="TSLAUSDT",
+        price_tick=Decimal("0.01"),
+        quantity_step=Decimal("0.01"),
+        minimum_quantity=Decimal("0.01"),
+        minimum_notional=Decimal("5"),
+        maximum_quantity=Decimal("1000"),
+        maximum_leverage=20,
+        contract_type="TRADIFI_PERPETUAL",
+    )
+    intent = SignalIntent("TSLAUSDT", now, Side.SHORT, "test")
+
+    import asyncio
+
+    asyncio.run(engine.enter(intent, market, account))
+
+    assert engine.last_position is not None
+    assert engine.last_position.entry_price == Decimal("1.23")
+    stop_order = next(order for order in submitted if order.order_type == "STOP_MARKET")
+    assert stop_order.stop_price == Decimal("1.24")

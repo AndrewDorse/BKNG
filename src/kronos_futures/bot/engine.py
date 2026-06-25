@@ -548,14 +548,31 @@ class TradingEngine:
         ORDERS.labels(self.binding.name, "entry", result.status).inc()
         if result.status not in {"FILLED", "PARTIALLY_FILLED"}:
             return
+        executed_quantity = result.executed_quantity
+        average_price = result.average_price
+        if executed_quantity <= 0 or average_price <= 0:
+            snapshot = next(
+                (
+                    item
+                    for item in await self.exchange.positions()
+                    if item.symbol == self.binding.symbol
+                ),
+                None,
+            )
+            if snapshot is None or abs(snapshot.quantity) <= 0 or snapshot.entry_price <= 0:
+                raise RuntimeError(
+                    f"Could not resolve filled position details for {self.binding.symbol}"
+                )
+            executed_quantity = abs(snapshot.quantity)
+            average_price = snapshot.entry_price
         self.state.managed_position = True
         self.state.strategy_metadata = dict(intent.metadata)
         self._save_state()
         position = PositionContext(
             self.binding.symbol,
             intent.side,
-            result.executed_quantity,
-            result.average_price,
+            executed_quantity,
+            average_price,
             datetime.now(timezone.utc),
             managed=True,
             metadata=intent.metadata,
